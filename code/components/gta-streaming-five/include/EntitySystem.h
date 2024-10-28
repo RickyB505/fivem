@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include <atArray.h>
 #include <atPool.h>
 
@@ -452,7 +454,7 @@ public:
 			boost::typeindex::ctti_type_index::type_id<T>().raw_name()
 		};
 
-		constexpr auto typeHash = HashString(typeName.substr(0, typeName.length() - boost::typeindex::detail::ctti_skip_size_at_end).substr(6));
+		constexpr auto typeHash = HashString(typeName.substr(0, typeName.length() - boost::typeindex::detail::skip().size_at_end).substr(6));
 		return this->IsOfType(typeHash);
 	}
 
@@ -556,7 +558,7 @@ public:
 
 	inline void RemoveFromScene()
 	{
-		FORWARD_FUNC(AddToSceneWrap, 0x120);
+		FORWARD_FUNC(RemoveFromScene, 0x120);
 	}
 
 	inline float GetRadius()
@@ -622,6 +624,22 @@ private:
 	uint8_t m_numSeats;
 
 	fwEntity* m_occupants[16];
+};
+
+STREAMING_EXPORT class CItemInfo : public rage::fwRefAwareBase
+{
+public:
+	inline uint32_t GetName() const
+	{
+		return m_name;
+	}
+
+private:
+	char m_pad[8]; // #TODO: fwRefAwareBase needs updating
+	uint32_t m_name;
+	uint32_t m_model;
+	uint32_t m_audio;
+	uint32_t m_slot;
 };
 
 struct CHandlingObject
@@ -898,6 +916,16 @@ struct MapDataVec4
 	}
 };
 
+struct STREAMING_EXPORT CDistantLODLight
+{
+	virtual ~CDistantLODLight() = default;
+
+	atArray<std::array<float, 3>> positions;
+	atArray<uint32_t> rgbi;
+	uint16_t numStreetLights;
+	uint16_t category;
+};
+
 struct STREAMING_EXPORT CMapData : rage::sysUseAllocator
 {
 	CMapData();
@@ -918,7 +946,9 @@ struct STREAMING_EXPORT CMapData : rage::sysUseAllocator
 	MapDataVec4 entitiesExtentsMax; // +72
 	atArray<fwEntityDef*> entities;
 
-	char pad[512 - 104];
+	char pad_68[280];
+	CDistantLODLight distantLodLights; // +392
+	char pad_1B8[80];
 
 	// etc.
 };

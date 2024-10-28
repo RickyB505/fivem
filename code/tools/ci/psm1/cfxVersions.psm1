@@ -71,6 +71,8 @@ function Get-CfxVersions {
 
         $LauncherPaths = @(
             "code/premake5.lua"
+            "code/premake5_builds.lua"
+            "code/premake5_defines.lua"
             "code/shared/"
             "code/tools/dbg/"
             "code/client/launcher/"

@@ -186,12 +186,6 @@ struct PatternPair
 	int offset;
 };
 
-template<typename T, T Value>
-static T Return()
-{
-	return Value;
-}
-
 static HookFunction hookFunction([]()
 {
 	const size_t gamerInfoSize = (xbr::IsGameBuildOrGreater<2060>()) ? sizeof(CGamerInfo<2060>) : sizeof(CGamerInfo<1604>);
@@ -407,10 +401,21 @@ static HookFunction hookFunction([]()
 	if (xbr::IsGameBuildOrGreater<3095>())
 	{
 		LimitPatch(hook::pattern("83 FB ? 77 ? 48 69 DB").count(1).get(0).get<void>(0));
-		LimitPatch(hook::pattern("83 FB 33 77 74 48 8B FB").count(1).get(0).get<void>(0));
 
-		// There's a new unknown "privilege" check that needs to be patched.
-		hook::jump(hook::get_pattern("84 C0 74 04 32 C0 EB 11 48 8B D6", -0x21), Return<bool, true>);
+		if (xbr::IsGameBuildOrGreater<3258>())
+		{
+			LimitPatch(hook::pattern("83 FB ? 77 ? 48 8B FB 48 69 FF ? ? ? ? 80 BC 37").count(1).get(0).get<void>(0));
+
+			// There's a new unknown "privilege" check that needs to be patched. Nuking the whole code block.
+			hook::nop(hook::get_pattern("83 FB ? 7D ? 8A CB"), 0x29);
+		}
+		else
+		{
+			LimitPatch(hook::pattern("83 FB 33 77 74 48 8B FB").count(1).get(0).get<void>(0));
+
+			// There's a new unknown "privilege" check that needs to be patched. Nuking the whole code block.
+			hook::nop(hook::get_pattern("8A CB E8 ? ? ? ? 48 85 C0 74 22 48 8B"), 0x2A);
+		}
 	}
 	else
 	{

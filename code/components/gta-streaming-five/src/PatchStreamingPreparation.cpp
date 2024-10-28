@@ -511,6 +511,10 @@ static bool CEntity_SetModelIdWrap(rage::fwEntity* entity, rage::fwModelId* id)
 
 static hook::thiscall_stub<void(void*, const rage::fwModelId&)> _fwEntity_SetModelId([]()
 {
+	if (xbr::IsGameBuildOrGreater<3258>())
+	{
+		return hook::get_pattern("48 89 5C 24 ? 57 48 83 EC ? 48 8B D9 48 8B 49 ? 48 8B FA 48 85 C9 74 ? 8B 41");
+	}
 	return hook::get_pattern("E8 ? ? ? ? 45 33 D2 3B 05", -12);
 });
 
@@ -528,9 +532,12 @@ static void fwEntity_DtorWrap(rage::fwEntity* entity)
 		// to do this, we use a little hack to not have to manually read the archetype list:
 		// the base rage::fwEntity::SetModelId doesn't do anything other than setting (rcx + 32)
 		// to the resolved archetype, or nullptr if none
+		//
+		// Note: for build 3258+ - this function actually tries to do more than just setting the archetype,
+		// but if the input is initialized with zeroes - it will work as we want it to.
 		rage::fwModelId modelId(midx);
 
-		void* fakeEntity[40 / 8] = { 0 };
+		void* fakeEntity[64 / 8] = { 0 };
 		_fwEntity_SetModelId(fakeEntity, modelId);
 
 		// not the same archetype - bail out

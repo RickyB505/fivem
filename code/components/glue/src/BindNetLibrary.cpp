@@ -20,7 +20,7 @@
 #include <CoreConsole.h>
 #include <se/Security.h>
 
-#include <ResourceManager.h>
+#include "ConVarsPacketHandler.h"
 
 static InitFunction initFunction([] ()
 {
@@ -93,76 +93,15 @@ static InitFunction initFunction([] ()
 
 			Instance<ICoreGameInit>::Get()->ClearVariable("storyMode");
 			Instance<ICoreGameInit>::Get()->ClearVariable("localMode");
-
-			fwRefContainer<fx::ResourceManager> resman = Instance<fx::ResourceManager>::Get();
-			resman->ResetResources();
 		});
-
-		static std::vector<std::string> convarsCreatedByServer;
-		static std::vector<std::string> convarsModifiedByServer;
 
 		OnKillNetworkDone.Connect([=]()
 		{
 			library->Disconnect();
-
-			// Remove ConVars created by the server
-			for (const std::string& convarName : convarsCreatedByServer)
-			{
-				console::GetDefaultContext()->GetVariableManager()->Unregister(convarName);
-			}
-
-			auto varManager = console::GetDefaultContext()->GetVariableManager();
-			// Revert values modified by server back to their old values
-			for (const std::string& convarName : convarsModifiedByServer)
-			{
-				auto convar = varManager->FindEntryRaw(convarName);
-				// We don't want to reset convars that are defaulted to ConVar_Replicated (i.e. game_enableFlyThroughWindscreen)
-				if (convar && !(varManager->GetEntryDefaultFlags(convarName) & ConVar_Replicated))
-				{
-					varManager->RemoveEntryFlags(convarName, ConVar_Replicated);
-					convar->SetValue(convar->GetOfflineValue());
-				}
-			}
-			convarsCreatedByServer.clear();
-			convarsModifiedByServer.clear();
 		});
 
 		// Process ConVar values sent from the server
-		library->AddReliableHandler("msgConVars", [](const char* buf, size_t len)
-		{
-			auto unpacked = msgpack::unpack(buf, len);
-			auto conVars = unpacked.get().as<std::map<std::string, std::string>>();
-
-			se::ScopedPrincipal principalScope(se::Principal{ "system.console" });
-			se::ScopedPrincipal principalScopeInternal(se::Principal{ "system.internal" });
-
-			for (const auto& conVar : conVars)
-			{
-				auto convar = console::GetDefaultContext()->GetVariableManager()->FindEntryRaw(conVar.first);
-				if (convar)
-				{
-					auto flags = console::GetDefaultContext()->GetVariableManager()->GetEntryFlags(conVar.first);
-
-					if (flags & ConVar_UserPref)
-					{
-						console::DPrintf("net", "Blocked convar %s from being set by server.\n", conVar.first);
-						continue;
-					}
-
-					// If the value is not already from the server
-					if (!(flags & ConVar_Replicated))
-					{
-						convar->SaveOfflineValue();	
-					}
-					convarsModifiedByServer.push_back(conVar.first);
-				}
-				else
-				{
-					convarsCreatedByServer.push_back(conVar.first);
-				}
-				console::GetDefaultContext()->ExecuteSingleCommandDirect(ProgramArguments{ "setr", conVar.first, conVar.second });
-			}
-		}, true);
+		library->AddPacketHandler<fx::ConVarsPacketHandler>(true);
 	});
 
 	Instance<ICoreGameInit>::Get()->OnGameRequestLoad.Connect([]()

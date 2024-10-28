@@ -12,8 +12,6 @@
 #include <CrossBuildRuntime.h>
 #include "Hooking.h"
 
-#include <LaunchMode.h>
-
 #include <sysAllocator.h>
 
 #include <MinHook.h>
@@ -21,8 +19,7 @@
 
 #include <unordered_set>
 
-extern void PointerArgumentSafety();
-extern bool storyMode;
+static bool storyMode;
 
 #if __has_include("scrEngineStubs.h")
 #include <scrEngineStubs.h>
@@ -45,44 +42,6 @@ static uint32_t* scrThreadCount;
 rage::scriptHandlerMgr* g_scriptHandlerMgr;
 
 static bool g_hasObfuscated;
-
-struct NativeRegistration_old
-{
-	NativeRegistration_old* nextRegistration;
-	rage::scrEngine::NativeHandler handlers[7];
-	uint32_t numEntries;
-	uint64_t hashes[7];
-
-	inline NativeRegistration_old* getNextRegistration()
-	{
-		return nextRegistration;
-	}
-
-	inline void setNextRegistration(NativeRegistration_old* registration)
-	{
-		nextRegistration = registration;
-	}
-
-	inline uint32_t getNumEntries()
-	{
-		return numEntries;
-	}
-
-	inline void setNumEntries(uint32_t entries)
-	{
-		numEntries = entries;
-	}
-
-	inline uint64_t getHash(uint32_t index)
-	{
-		return hashes[index];
-	}
-
-	inline void setHash(uint32_t index, uint64_t newHash)
-	{
-		hashes[index] = newHash;
-	}
-};
 
 // see https://github.com/ivanmeler/OpenVHook/blob/b5b4d84e76feb05a988e9d69b6b5c164458341cb/OpenVHook/Scripting/ScriptEngine.cpp#L22
 #pragma pack(push, 1)
@@ -311,6 +270,7 @@ void scrEngine::CreateThread(GtaThread* thread)
 }
 
 uint64_t MapNative(uint64_t inNative);
+void ReviveNative(uint64_t inNative);
 
 template<typename TReg>
 bool RegisterNativeOverride(uint64_t hash, scrEngine::NativeHandler handler)
@@ -384,14 +344,7 @@ void RegisterNativeDo(uint64_t hash, scrEngine::NativeHandler handler)
 
 void RegisterNative(uint64_t hash, scrEngine::NativeHandler handler)
 {
-	if (Is372())
-	{
-		RegisterNativeDo<NativeRegistration_old>(hash, handler);
-	}
-	else
-	{
-		RegisterNativeDo<NativeRegistration_obf>(hash, handler);
-	}
+	RegisterNativeDo<NativeRegistration_obf>(hash, handler);
 }
 
 static std::vector<std::pair<uint64_t, scrEngine::NativeHandler>> g_nativeHandlers;
@@ -404,6 +357,18 @@ void scrEngine::RegisterNativeHandler(const char* nativeName, NativeHandler hand
 void scrEngine::RegisterNativeHandler(uint64_t nativeIdentifier, NativeHandler handler)
 {
 	g_nativeHandlers.push_back(std::make_pair(nativeIdentifier, handler));
+}
+
+void scrEngine::ReviveNativeHandler(uint64_t nativeIdentifier, NativeHandler handler)
+{
+	RegisterNativeHandler(nativeIdentifier, handler);
+	if (MapNative(nativeIdentifier) == nativeIdentifier)
+	{
+		// If two builds share the same maxVersion index, e.g., 2545 and 2612,
+		// and a script command was removed, then the native may be found in the
+		// mapping table instead of the unmapped table.
+		ReviveNative(nativeIdentifier);
+	}
 }
 
 static InitFunction initFunction([] ()
@@ -421,10 +386,6 @@ static InitFunction initFunction([] ()
 			g_nativeHandlers.clear();
 		};
 
-		doReg();
-
-		PointerArgumentSafety();
-		g_fastPathMap.clear();
 		doReg();
 
 		for (auto& entry : g_onScriptInitQueue)
@@ -468,7 +429,7 @@ scrEngine::NativeHandler GetNativeHandlerDo(uint64_t origHash, uint64_t hash)
 
 scrEngine::NativeHandler GetNativeHandlerWrap(uint64_t origHash, uint64_t hash)
 {
-	return (Is372()) ? GetNativeHandlerDo<NativeRegistration_old>(origHash, hash) : GetNativeHandlerDo<NativeRegistration_obf>(origHash, hash);
+	return GetNativeHandlerDo<NativeRegistration_obf>(origHash, hash);
 }
 
 scrEngine::NativeHandler scrEngine::GetNativeHandler(uint64_t hash)
@@ -491,7 +452,7 @@ static int(*g_origReturnTrue)(void* a1, void* a2);
 
 static int ReturnTrueFromScript(void* a1, void* a2)
 {
-	if (Instance<ICoreGameInit>::Get()->HasVariable("storyMode"))
+	if (storyMode)
 	{
 		return g_origReturnTrue(a1, a2);
 	}
@@ -515,7 +476,7 @@ static int(*g_origNoScript)(void*, int);
 
 static int JustNoScript(GtaThread* thread, int a2)
 {
-	if (Instance<ICoreGameInit>::Get()->HasVariable("storyMode"))
+	if (storyMode)
 	{
 		return g_origNoScript(thread, a2);
 	}
@@ -548,43 +509,61 @@ static InitFunction initFunction([]
 	if (xbr::IsGameBuildOrGreater<2612>())
 	{
 		// IS_BIT_SET is missing in b2612+, re-adding for compatibility
-		rage::scrEngine::RegisterNativeHandler(0xE2D0C323A1AE5D85 /* 2545 hash */, [](rage::scrNativeCallContext* ctx)
+		rage::scrEngine::OnScriptInit.Connect([]()
 		{
-			bool result = false;
-
-			auto value = ctx->GetArgument<uint32_t>(0);
-			auto offset = ctx->GetArgument<int>(1);
-
-			if (offset < 32)
+			rage::scrEngine::ReviveNativeHandler(0xE2D0C323A1AE5D85 /* 2545 hash */, [](rage::scrNativeCallContext* ctx)
 			{
-				result = (value & (1 << offset)) != 0;
-			}
+				bool result = false;
 
-			ctx->SetResult<int>(0, result);
+				auto value = ctx->GetArgument<uint32_t>(0);
+				auto offset = ctx->GetArgument<int>(1);
+
+				if (offset < 32)
+				{
+					result = (value & (1 << offset)) != 0;
+				}
+
+				ctx->SetResult<int>(0, result);
+			});
 		});
 	}
 });
 
 static HookFunction hookFunction([] ()
 {
-	char* location = xbr::IsGameBuildOrGreater<2545>() ? hook::pattern("48 8B C8 EB 03 49 8B CD 48 8B 05").count(1).get(0).get<char>(11) : hook::pattern("48 8B C8 EB 03 48 8B CB 48 8B 05").count(1).get(0).get<char>(11);
+	Instance<ICoreGameInit>::Get()->OnSetVariable.Connect([](const std::string& name, bool value)
+	{
+		if (name == "storyMode")
+		{
+			storyMode = value;
+		}
+	});
+
+	char* location = nullptr;
+
+	if (xbr::IsGameBuildOrGreater<3258>())
+	{
+		location = hook::pattern("48 8B C8 EB ? 33 C9 48 8B 05").count(1).get(0).get<char>(10);
+	}
+	else if (xbr::IsGameBuildOrGreater<2545>())
+	{
+		location = hook::pattern("48 8B C8 EB 03 49 8B CD 48 8B 05").count(1).get(0).get<char>(11);
+	}
+	else
+	{
+		location = hook::pattern("48 8B C8 EB 03 48 8B CB 48 8B 05").count(1).get(0).get<char>(11);
+	}
 
 	scrThreadCollection = reinterpret_cast<decltype(scrThreadCollection)>(location + *(int32_t*)location + 4);
 
 	activeThreadTlsOffset = *hook::pattern("48 8B 04 D0 4A 8B 14 00 48 8B 01 F3 44 0F 2C 42 20").count(1).get(0).get<uint32_t>(-4);
 
-	if (Is372())
 	{
-		location = hook::pattern("FF 40 5C 8B 15 ? ? ? ? 48 8B").count(1).get(0).get<char>(5);
-		scrThreadId = reinterpret_cast<decltype(scrThreadId)>(location + *(int32_t*)location + 4);
-
-		location -= 9;
-
-		scrThreadCount = reinterpret_cast<decltype(scrThreadCount)>(location + *(int32_t*)location + 4);
-	}
-	else
-	{
-		if (xbr::IsGameBuildOrGreater<2612>())
+		if (xbr::IsGameBuildOrGreater<3258>())
+		{
+			scrThreadId = hook::get_address<uint32_t*>(hook::get_pattern("8B 15 ? ? ? ? 48 8B 05 ? ? ? ? FF C2 89 15 ? ? ? ? 48 8B 0C F8", 2));
+		}
+		else if (xbr::IsGameBuildOrGreater<2612>())
 		{
 			scrThreadId = hook::get_address<uint32_t*>(hook::get_pattern("8B 15 ? ? ? ? 48 8B 05 ? ? ? ? FF C2 89 15 ? ? ? ? 48 8B 0C D8", 2));
 		}
@@ -603,17 +582,8 @@ static HookFunction hookFunction([] ()
 		}
 
 		location = xbr::IsGameBuildOrGreater<2545>() ? hook::get_pattern<char>("FF 0D ? ? ? ? 48 8B D9 75", 2) : hook::get_pattern<char>("FF 0D ? ? ? ? 48 8B F9", 2);
-
 		scrThreadCount = reinterpret_cast<decltype(scrThreadCount)>(location + *(int32_t*)location + 4);
-	}
 
-	if (Is372())
-	{
-		location = hook::pattern("76 61 49 8B 7A 40 48 8D 0D").count(1).get(0).get<char>(9);
-		registrationTable<NativeRegistration_old> = reinterpret_cast<decltype(registrationTable<NativeRegistration_old>)>(location + *(int32_t*)location + 4);
-	}
-	else
-	{
 		location = hook::pattern("76 32 48 8B 53 40").count(1).get(0).get<char>(9);
 		registrationTable<NativeRegistration_obf> = reinterpret_cast<decltype(registrationTable<NativeRegistration_obf>)>(location + *(int32_t*)location + 4);
 	}
@@ -631,7 +601,6 @@ static HookFunction hookFunction([] ()
 		MH_EnableHook(MH_ALL_HOOKS);
 	}
 
-	if (!CfxIsSinglePlayer())
 	{
 		MH_Initialize();
 

@@ -8,6 +8,7 @@
 #include <StdInc.h>
 #include <jitasm.h>
 #include <Hooking.h>
+#include <Hooking.Stubs.h>
 
 #include <Pool.h>
 
@@ -29,6 +30,8 @@
 #include <MinHook.h>
 
 #include <CrossBuildRuntime.h>
+
+#include <CustomRtti.h>
 
 #if __has_include(<StatusText.h>)
 #include <StatusText.h>
@@ -1036,9 +1039,9 @@ static hook::cdecl_stub<void()> _reloadMapIfNeeded([]()
 	return hook::get_pattern("74 1F 48 8D 0D ? ? ? ? E8 ? ? ? ? 48 8D 0D ? ? ? ? E8 ? ? ? ? C6 05", -0xB);
 });
 
+static char* loadChangeSet = nullptr;
 static void ReloadMapStoreNative()
 {
-	static auto loadChangeSet = hook::get_pattern<char>("48 81 EC 50 03 00 00 49 8B F0 4C", -0x18);
 	uint8_t origCode[0x4F3];
 	memcpy(origCode, loadChangeSet, sizeof(origCode));
 
@@ -1164,7 +1167,7 @@ static void ReloadMapStore()
 
 #ifdef GTA_FIVE
 	// needs verification for newer builds
-	if (!xbr::IsGameBuildOrGreater<3095 + 1>())
+	if (!xbr::IsGameBuildOrGreater<3323 + 1>())
 	{
 		ReloadMapStoreNative();
 	}
@@ -1568,11 +1571,7 @@ static void HandleDataFile(const std::pair<std::string, std::string>& dataFile, 
 
 	if (mounter)
 	{
-#ifdef GTA_FIVE
-		std::string className = (xbr::IsGameBuildOrGreater<2802>()) ? fmt::sprintf("%p", (void*)hook::get_unadjusted(*(void**)mounter)) : typeid(*mounter).name();
-#else
-		std::string className = fmt::sprintf("%p", (void*)hook::get_unadjusted(*(void**)mounter));
-#endif
+		std::string className = SearchTypeName(mounter);
 
 		CDataFileMgr::DataFile entry;
 		memset(&entry, 0, sizeof(entry));
@@ -3109,6 +3108,17 @@ static void fwMapDataStore__FinishLoadingHook(streaming::strStreamingModule* sto
 		}
 	}
 
+	// b2802 - four-april-virginia
+	// b2699 - skylark-whiskey-jig
+	CDistantLODLight& lodLights = mapData->distantLodLights;
+	if (lodLights.numStreetLights > lodLights.positions.GetCount())
+	{
+		auto name = streaming::GetStreamingNameForIndex(idx + store->baseIdx);
+		trace("Fixed CMapData DistantLODLightsSOA (numStreetLights > positions.GetCount()) in %s.\n", name);
+
+		lodLights.numStreetLights = lodLights.positions.GetCount();
+	}
+
 	return g_origfwMapDataStore__FinishLoading(store, idx, data);
 }
 #endif
@@ -3298,9 +3308,256 @@ static void FreeArchetypesHook(uint32_t idx)
 DLL_IMPORT extern fwEvent<> PreSetupLoadingScreens;
 #endif
 
+#if defined(GTA_FIVE) || IS_RDR3
+pgRawStreamer* (*g_GetRawStreamer)(void);
+static int32_t chunkyArrayCountOffset = 0;
+static int32_t chunkyArrayOffset = 0;
+void* (*g_chunkyArrayAppend)(hook::FlexStruct* self);
+void* chunkyArrayAppend(hook::FlexStruct* self)
+{
+	const int32_t loadedEntriesCount = self->Get<int32_t>(chunkyArrayCountOffset);
+	if (loadedEntriesCount >= 0xFFFF)
+	{
+		FatalError("ERR_STR_FAILURE: trying to add more assets to pgRawStreamer when it's already full (65535)."); 
+	}
+
+	return g_chunkyArrayAppend(self);
+}
+
+static ConsoleCommand pgRawStreamer_AssetsCountCmd("assetscount", []()
+{
+	hook::FlexStruct* rawStreamerFlex = (hook::FlexStruct*)g_GetRawStreamer();
+	const int32_t loadedEntriesCount = rawStreamerFlex->Get<int32_t>(chunkyArrayOffset + chunkyArrayCountOffset);
+	trace("Total loaded assets in pgRawStreamer - %d/65535\n", loadedEntriesCount);
+});
+
+const rage::chunkyArray<rage::pgRawEntry, 1024, 64>& rage::GetPgRawStreamerEntries()
+{
+	static rage::chunkyArray<rage::pgRawEntry, 1024, 64> empty;
+	hook::FlexStruct* rawStreamerFlex = (hook::FlexStruct*)g_GetRawStreamer();
+
+	if (rawStreamerFlex)
+	{
+		return rawStreamerFlex->Get<rage::chunkyArray<rage::pgRawEntry, 1024, 64>>(chunkyArrayOffset);
+	}
+	else
+	{
+		return empty;
+	}
+}
+
+#endif
+
+static void CleanupStreaming()
+{
+	// safely drain the RAGE streamer before we unload everything
+	SafelyDrainStreamer();
+
+	g_lockReload = true;
+	g_unloadingCfx = true;
+
+	UnloadDataFiles();
+
+	std::set<std::string> tags;
+
+	for (auto& tag : g_customStreamingFilesByTag)
+	{
+		tags.insert(tag.first);
+	}
+
+	for (auto& tag : tags)
+	{
+		CfxCollection_RemoveStreamingTag(tag);
+	}
+
+	auto mapDataStore = streaming::Manager::GetInstance()->moduleMgr.GetStreamingModule("ymap");
+	auto typesStore = streaming::Manager::GetInstance()->moduleMgr.GetStreamingModule("ytyp");
+	auto navMeshStore = streaming::Manager::GetInstance()->moduleMgr.GetStreamingModule("ynv");
+	auto staticBoundsStore = streaming::Manager::GetInstance()->moduleMgr.GetStreamingModule("ybn");
+	auto str = streaming::Manager::GetInstance();
+
+	for (auto [module, idx] : g_pendingRemovals)
+	{
+		if (module == typesStore)
+		{
+			struct fwMapDataDef
+			{
+#ifdef GTA_FIVE
+				uint8_t pad[24];
+#elif IS_RDR3
+				uint8_t pad[32];
+#endif
+				union
+				{
+					uint32_t idx;
+					uint32_t* idxArray;
+				} dependencies;
+
+				uint8_t pad2[6];
+				uint16_t dependencyCount;
+
+				void RemoveDependency(uint32_t idx)
+				{
+					if (dependencyCount == 1)
+					{
+						if (dependencies.idx == idx)
+						{
+							dependencyCount = 0;
+							dependencies.idx = -1;
+						}
+					}
+					else
+					{
+						for (int i = 0; i < dependencyCount; i++)
+						{
+							if (dependencies.idxArray[i] == idx)
+							{
+								if ((i + 1) < dependencyCount)
+								{
+									memmove(&dependencies.idxArray[i], &dependencies.idxArray[i + 1], sizeof(uint32_t) * (dependencyCount - i));
+								}
+
+								dependencyCount--;
+								i--;
+							}
+						}
+
+						// move out of array if we're 1 now
+						if (dependencyCount == 1)
+						{
+							auto soleIdx = dependencies.idxArray[0];
+							rage::GetAllocator()->Free(dependencies.idxArray);
+
+							dependencies.idx = soleIdx;
+						}
+					}
+				}
+			};
+
+			atPoolBase* entryPool = (atPoolBase*)((char*)module + 56);
+			auto entry = entryPool->GetAt<char>(idx);
+
+#ifdef GTA_FIVE
+			*(uint16_t*)(entry + 16) &= ~0x14;
+#elif IS_RDR3
+			*(uint16_t*)(entry + 24) &= ~0x14;
+#endif
+
+			// remove from any dependent mapdata
+			for (auto entry : fx::GetIteratorView(g_itypToMapDataDeps.equal_range(*(uint32_t*)(entry + 12))))
+			{
+				auto mapDataHash = entry.second;
+				auto mapDataIdx = streaming::GetStreamingIndexForLocalHashKey(mapDataStore, mapDataHash);
+
+				if (mapDataIdx != -1)
+				{
+					atPoolBase* entryPool = (atPoolBase*)((char*)mapDataStore + 56);
+					auto mdEntry = entryPool->GetAt<fwMapDataDef>(mapDataIdx);
+
+					if (mdEntry)
+					{
+						mdEntry->RemoveDependency(idx);
+					}
+				}
+			}
+		}
+
+		// if this is loaded by means of dependents, in Five we should remove the flags indicating this, or RemoveObject will fail and RemoveSlot will lead to inconsistent state
+		// in RDR3 this will have a special-case check in RemoveObject for dependents, but in case it fails we shall remove this still (otherwise RemoveSlot will corrupt)
+		//
+		// we don't do this for fwStaticBoundsStore since we don't call RemoveSlot for other reasons (will lead to odd state for interiors)
+		if (module != staticBoundsStore && str->Entries[idx + module->baseIdx].flags & 0xFFFC)
+		{
+			str->Entries[idx + module->baseIdx].flags &= ~0xFFFC;
+		}
+
+		// ClearRequiredFlag
+		str->ReleaseObject(idx + module->baseIdx, 0xF1);
+
+		// RemoveObject
+		str->ReleaseObject(idx + module->baseIdx);
+
+#ifdef GTA_FIVE
+		if (module == typesStore)
+		{
+			// if unloaded at *runtime* but flags were set, archetypes likely weren't freed - we should
+			// free them now.
+			rage__fwArchetypeManager__FreeArchetypes(idx);
+		}
+#endif
+	}
+
+	// call RemoveSlot after we have removed all objects, or dependency tracking may crash
+	for (auto [module, idx] : g_pendingRemovals)
+	{
+		// navmeshstore won't remove from some internal 'name hash' and therefore re-registration crashes
+		// staticboundsstore has a weird issue too at times (regarding interior proxies?)
+		if (module != navMeshStore && module != staticBoundsStore)
+		{
+			module->RemoveSlot(idx);
+		}
+	}
+
+	g_pendingRemovals.clear();
+
+	g_unloadingCfx = false;
+}
+
+#ifdef GTA_FIVE
+static void (*g_origActionEventsOnGameDestruction)();
+static void VideoEditorActionEventsOnGameDestruction()
+{
+	CleanupStreaming();
+	g_origActionEventsOnGameDestruction();
+}
+
+static int32_t entityFlagsOffset = 0;
+static int32_t entityArchetypeOffset = 0;
+
+static hook::cdecl_stub<void*(void*)> rage__fwArchetypeManager__LookupModelId([]()
+{
+	return hook::get_pattern("0F B7 05 ? ? ? ? 44 8B 49 ? 45 33 C0");
+});
+
+static void (*g_origReleaseImportantSlodAssets)(void* entity);
+static void ReleaseImportantSlodAssets(void* entity)
+{
+	if (!entity || (*(uint8_t*)((uintptr_t)entity + entityFlagsOffset) & 4) == 0)
+	{
+		return;
+	}
+
+	// Prevent crash when enetity without attached archetype is deleted.
+	void* archetype = *(void**)((uintptr_t)entity + entityArchetypeOffset);
+	if (!archetype || !rage__fwArchetypeManager__LookupModelId(archetype))
+	{
+		return;
+	}
+
+	return g_origReleaseImportantSlodAssets(entity);
+}
+#endif
+
 static HookFunction hookFunction([]()
 {
 #ifdef GTA_FIVE
+	g_GetRawStreamer = (decltype(g_GetRawStreamer))hook::get_pattern<uint8_t>("48 83 EC ? 48 8B 05 ? ? ? ? 48 85 C0 75 ? 8D 50");
+	auto chunkyArrayAppendLoc = hook::get_pattern<uint8_t>("40 53 48 83 EC ? F7 81 ? ? ? ? ? ? ? ? 48 8B D9 75");
+	chunkyArrayCountOffset = *(int32_t*)(chunkyArrayAppendLoc + 8);
+	chunkyArrayOffset = *hook::get_pattern<int32_t>("48 8D 8F ? ? ? ? E8 ? ? ? ? 48 8D 4C 24", 3);
+	g_chunkyArrayAppend = hook::trampoline(chunkyArrayAppendLoc, &chunkyArrayAppend);
+#elif IS_RDR3
+	g_GetRawStreamer = (decltype(g_GetRawStreamer))hook::get_pattern<uint8_t>("48 83 EC ? 48 8B 05 ? ? ? ? 48 85 C0 75 ? 8D 50 ? B9");
+	auto chunkyArrayAppendLoc = hook::get_pattern<uint8_t>("40 53 48 83 EC ? 8B 91 ? ? ? ? 48 8B D9 F7 C2");
+	chunkyArrayCountOffset = *(int32_t*)(chunkyArrayAppendLoc + 8);
+	chunkyArrayOffset = *hook::get_pattern<int32_t>("48 8D 9F ? ? ? ? 48 89 07 83 A3", 3);
+	g_chunkyArrayAppend = hook::trampoline(chunkyArrayAppendLoc, &chunkyArrayAppend);
+#endif
+
+#ifdef GTA_FIVE
+
+	loadChangeSet = hook::get_pattern<char>("48 81 EC 50 03 00 00 49 8B F0 4C", -0x18);
+
 	PreSetupLoadingScreens.Connect([]()
 	{
 		FlushCustomAssets();
@@ -3485,157 +3742,7 @@ static HookFunction hookFunction([]()
 
 	Instance<ICoreGameInit>::Get()->OnShutdownSession.Connect([]()
 	{
-		// safely drain the RAGE streamer before we unload everything
-		SafelyDrainStreamer();
-
-		g_lockReload = true;
-		g_unloadingCfx = true;
-
-		UnloadDataFiles();
-
-		std::set<std::string> tags;
-
-		for (auto& tag : g_customStreamingFilesByTag)
-		{
-			tags.insert(tag.first);
-		}
-
-		for (auto& tag : tags)
-		{
-			CfxCollection_RemoveStreamingTag(tag);
-		}
-
-		auto mapDataStore = streaming::Manager::GetInstance()->moduleMgr.GetStreamingModule("ymap");
-		auto typesStore = streaming::Manager::GetInstance()->moduleMgr.GetStreamingModule("ytyp");
-		auto navMeshStore = streaming::Manager::GetInstance()->moduleMgr.GetStreamingModule("ynv");
-		auto staticBoundsStore = streaming::Manager::GetInstance()->moduleMgr.GetStreamingModule("ybn");
-		auto str = streaming::Manager::GetInstance();
-
-		for (auto [module, idx] : g_pendingRemovals)
-		{
-			if (module == typesStore)
-			{
-				struct fwMapDataDef
-				{
-#ifdef GTA_FIVE
-					uint8_t pad[24];
-#elif IS_RDR3
-					uint8_t pad[32];
-#endif
-					union
-					{
-						uint32_t idx;
-						uint32_t* idxArray;
-					} dependencies;
-
-					uint8_t pad2[6];
-					uint16_t dependencyCount;
-
-					void RemoveDependency(uint32_t idx)
-					{
-						if (dependencyCount == 1)
-						{
-							if (dependencies.idx == idx)
-							{
-								dependencyCount = 0;
-								dependencies.idx = -1;
-							}
-						}
-						else
-						{
-							for (int i = 0; i < dependencyCount; i++)
-							{
-								if (dependencies.idxArray[i] == idx)
-								{
-									if ((i + 1) < dependencyCount)
-									{
-										memmove(&dependencies.idxArray[i], &dependencies.idxArray[i + 1], sizeof(uint32_t) * (dependencyCount - i));
-									}
-
-									dependencyCount--;
-									i--;
-								}
-							}
-
-							// move out of array if we're 1 now
-							if (dependencyCount == 1)
-							{
-								auto soleIdx = dependencies.idxArray[0];
-								rage::GetAllocator()->Free(dependencies.idxArray);
-
-								dependencies.idx = soleIdx;
-							}
-						}
-					}
-				};
-
-				atPoolBase* entryPool = (atPoolBase*)((char*)module + 56);
-				auto entry = entryPool->GetAt<char>(idx);
-
-#ifdef GTA_FIVE
-				*(uint16_t*)(entry + 16) &= ~0x14;
-#elif IS_RDR3
-				*(uint16_t*)(entry + 24) &= ~0x14;
-#endif
-
-				// remove from any dependent mapdata
-				for (auto entry : fx::GetIteratorView(g_itypToMapDataDeps.equal_range(*(uint32_t*)(entry + 12))))
-				{
-					auto mapDataHash = entry.second;
-					auto mapDataIdx = streaming::GetStreamingIndexForLocalHashKey(mapDataStore, mapDataHash);
-
-					if (mapDataIdx != -1)
-					{
-						atPoolBase* entryPool = (atPoolBase*)((char*)mapDataStore + 56);
-						auto mdEntry = entryPool->GetAt<fwMapDataDef>(mapDataIdx);
-
-						if (mdEntry)
-						{
-							mdEntry->RemoveDependency(idx);
-						}
-					}
-				}
-			}
-
-			// if this is loaded by means of dependents, in Five we should remove the flags indicating this, or RemoveObject will fail and RemoveSlot will lead to inconsistent state
-			// in RDR3 this will have a special-case check in RemoveObject for dependents, but in case it fails we shall remove this still (otherwise RemoveSlot will corrupt)
-			//
-			// we don't do this for fwStaticBoundsStore since we don't call RemoveSlot for other reasons (will lead to odd state for interiors)
-			if (module != staticBoundsStore && str->Entries[idx + module->baseIdx].flags & 0xFFFC)
-			{
-				str->Entries[idx + module->baseIdx].flags &= ~0xFFFC;
-			}
-
-			// ClearRequiredFlag
-			str->ReleaseObject(idx + module->baseIdx, 0xF1);
-
-			// RemoveObject
-			str->ReleaseObject(idx + module->baseIdx);
-
-#ifdef GTA_FIVE
-			if (module == typesStore)
-			{
-				// if unloaded at *runtime* but flags were set, archetypes likely weren't freed - we should
-				// free them now.
-				rage__fwArchetypeManager__FreeArchetypes(idx);
-			}
-#endif
-		}
-
-		// call RemoveSlot after we have removed all objects, or dependency tracking may crash
-		for (auto [module, idx] : g_pendingRemovals)
-		{
-			// navmeshstore won't remove from some internal 'name hash' and therefore re-registration crashes
-			// staticboundsstore has a weird issue too at times (regarding interior proxies?)
-			if (module != navMeshStore && module != staticBoundsStore)
-			{
-				module->RemoveSlot(idx);
-			}
-		}
-
-		g_pendingRemovals.clear();
-
-		g_unloadingCfx = false;
+		CleanupStreaming();
 	}, -9999);
 
 	OnMainGameFrame.Connect([=]()
@@ -3818,6 +3925,29 @@ static HookFunction hookFunction([]()
 		hook::set_call(&g_origAddMapBoolEntry, location);
 		hook::call(location, WrapAddMapBoolEntry);
 	}
+
+#ifdef GTA_FIVE
+	// Cleanup streaming entities when loading a new clip in video editor.
+	// Use the same logic as we do on game disconnect.
+	{
+		auto loc = hook::get_pattern("E8 ? ? ? ? E8 ? ? ? ? 48 8B 0D ? ? ? ? E8 ? ? ? ? 8B D3");
+		hook::set_call(&g_origActionEventsOnGameDestruction, loc);
+		hook::call(loc, VideoEditorActionEventsOnGameDestruction);
+	}
+
+	// Do not crash when entities without attached archetypes are deleted.
+	// This happens in video editor streaming cleanup. See VideoEditorActionEventsOnGameDestruction.
+	{
+		MH_Initialize();
+
+		auto location = hook::get_pattern("48 89 5C 24 ? 57 48 83 EC ? F6 41 ? ? 48 8B F9 74 ? 48 8B 49");
+		MH_CreateHook(location, ReleaseImportantSlodAssets, (void**)&g_origReleaseImportantSlodAssets);
+		MH_EnableHook(location);
+
+		entityFlagsOffset = *(uint8_t*)((uintptr_t)location + 12);
+		entityArchetypeOffset = *(uint8_t*)((uintptr_t)location + 22);
+	}
+#endif
 
 	// debug hook for pgRawStreamer::OpenCollectionEntry
 	MH_Initialize();
