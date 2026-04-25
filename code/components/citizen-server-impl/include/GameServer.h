@@ -75,6 +75,11 @@ namespace fx
 
 		virtual void DropClientv(const fx::ClientSharedPtr& client, const std::string& resourceName, ClientDropReason clientDropReason, const std::string& reason);
 
+		void DropClientWithReason(const fx::ClientSharedPtr& client, const std::string& resourceName, ClientDropReason clientDropReason, const std::string& reason)
+		{
+			DropClientv(client, resourceName, clientDropReason, reason);
+		}
+
 		template<typename... TArgs>
 		void DropClientWithReason(const fx::ClientSharedPtr& client, const std::string& resourceName, ClientDropReason clientDropReason, const std::string& reason, const TArgs&... args)
 		{
@@ -119,6 +124,11 @@ namespace fx
 		inline std::string GetPlayersToken()
 		{
 			return m_playersToken->GetValue();
+		}
+
+		inline std::string GetProfileDataToken()
+		{
+			return m_profileDataToken->GetValue();
 		}
 
 		inline int GetNetLibVersion()
@@ -290,6 +300,8 @@ namespace fx
 		std::shared_ptr<ConVar<std::string>> m_rconPassword;
 
 		std::shared_ptr<ConVar<std::string>> m_playersToken;
+		
+		std::shared_ptr<ConVar<std::string>> m_profileDataToken;
 
 		std::shared_ptr<ConVar<std::string>> m_hostname;
 

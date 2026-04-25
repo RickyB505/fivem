@@ -123,6 +123,8 @@ void TaskDialogEmulated(TASKDIALOGCONFIG* config, int* button, void*, void*)
 
 		g_buttonEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 		WaitForSingleObject(g_buttonEvent, INFINITE);
+		CloseHandle(g_buttonEvent);
+		g_buttonEvent = nullptr;
 
 		*button = g_buttonResponse ? IDYES : IDNO;
 	}
@@ -218,9 +220,4 @@ void UI_DisplayError(const wchar_t* error)
 
 	g_hadError = true;
 	netLibrary->OnConnectionError(fmt::sprintf("Changing game build failed: %s", ToNarrow(error)).c_str());
-}
-
-void UI_SetSnailState(bool)
-{
-
 }

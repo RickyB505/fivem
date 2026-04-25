@@ -49,6 +49,7 @@
 
 #include <json.hpp>
 
+#include "NetBitVersion.h"
 #include "NetEvent.h"
 #include "NetEventPacketHandler.h"
 #include "ReassembledEventPacketHandler.h"
@@ -209,7 +210,14 @@ namespace fx
 		int bps = context.GetArgument<int>(3);
 
 		auto reassembler = Instance<fx::ResourceManager>::Get()->GetComponent<fx::EventReassemblyComponent>();
-		reassembler->TriggerEvent(0, std::string_view{ eventName.c_str(), eventName.size() + 1 }, eventPayload, bps);
+		if (Instance<ICoreGameInit>::Get()->IsNetVersionOrHigher(net::NetBitVersion::netVersion5))
+		{
+			reassembler->TriggerEventV2(0, eventName, eventPayload, bps);
+		}
+		else
+		{
+			reassembler->TriggerEvent(0, std::string_view{ eventName.c_str(), eventName.size() + 1 }, eventPayload, bps);
+		}
 	}
 
 	void TriggerDisabledLatentServerEventInternal(fx::ScriptContext& context)
@@ -322,7 +330,7 @@ void NetLibraryResourcesComponent::UpdateResources(const std::string& updateList
 															})
 									 .dump());
 
-			static ConVar<bool> streamerMode("ui_streamerMode", ConVar_None, false);
+			static ConVar<bool> streamerMode("ui_streamerMode", ConVar_UserPref, false);
 			std::string errorData = fmt::sprintf(" Error state: %s", std::string{ data, size });
 
 			if (streamerMode.GetValue())
@@ -495,6 +503,11 @@ void NetLibraryResourcesComponent::UpdateResources(const std::string& updateList
 							entry.rscPagesPhysical = 0;
 						}
 
+						if (i->value.HasMember("e"))
+						{
+							entry.e = i->value["e"].GetBool();
+						}
+
 						uint32_t size = i->value["size"].GetUint();
 						auto rawSize = size;
 
@@ -515,6 +528,7 @@ void NetLibraryResourcesComponent::UpdateResources(const std::string& updateList
 																																{ "rscPagesPhysical", std::to_string(entry.rscPagesPhysical) },
 																																{ "rscPagesVirtual", std::to_string(entry.rscPagesVirtual) },
 																																{ "rawSize", std::to_string(rawSize) },
+																																{ "e", std::to_string(entry.e) },
 																																});
 
 						entry.filePath = mounter->FormatPath(resourceName, filename);
@@ -713,6 +727,7 @@ void NetLibraryResourcesComponent::AttachToObject(NetLibrary* netLibrary)
 	fx::EnableEventReassemblyChanged(fx::g_enableEventReassembly.GetHelper().get());
 
 	netLibrary->AddPacketHandler<fx::ReassembledEventPacketHandler>(true);
+	netLibrary->AddPacketHandler<fx::ReassembledEventPacketV2Handler>(true);
 	netLibrary->AddPacketHandler<fx::NetEventPacketHandler>(false);
 	netLibrary->AddPacketHandler<fx::ResourceStopPacketHandler>(false);
 	netLibrary->AddPacketHandler<fx::ResourceStartPacketHandler>(false);
@@ -775,10 +790,19 @@ void NetLibraryResourcesComponent::AttachToObject(NetLibrary* netLibrary)
 		});
 	});
 
+	static bool gameLoaded = false;
+
+	Instance<ICoreGameInit>::Get()->OnGameFinalizeLoad.Connect([]()
+	{
+		gameLoaded = true;
+	});
+
 	static bool inSessionReset = false;
 
 	Instance<ICoreGameInit>::Get()->OnShutdownSession.Connect([]()
 	{
+		gameLoaded = false;
+
 		AddCrashometry("reset_resources", "true");
 
 		inSessionReset = true;
@@ -804,13 +828,14 @@ void NetLibraryResourcesComponent::AttachToObject(NetLibrary* netLibrary)
 
 	console::GetDefaultContext()->GetCommandManager()->FallbackEvent.Connect([netLibrary](const std::string& cmd, const ProgramArguments& args, const std::string& context)
 	{
-		if (netLibrary->GetConnectionState() != NetLibrary::CS_ACTIVE)
+		if (netLibrary->GetConnectionState() != NetLibrary::CS_ACTIVE || !gameLoaded)
 		{
 			return true;
 		}
 
 		net::packet::ClientServerCommandPacket serverCommand;
-		serverCommand.data.command = console::GetDefaultContext()->GetCommandManager()->GetRawCommand();
+		const std::string& commandName = console::GetDefaultContext()->GetCommandManager()->GetRawCommand();
+		serverCommand.data.command = std::string_view{commandName.data(), commandName.size()};
 		netLibrary->SendNetPacket(serverCommand);
 		return false;
 	},
@@ -821,11 +846,16 @@ static NetLibrary* g_netLibrary;
 
 static class : public fx::EventReassemblySink
 {
-	virtual void SendPacket(int target, std::string_view packet) override
+	void SendPacket(int target, std::string_view packet) override
 	{
 		net::packet::ReassembledEventPacket reassembled;
 		reassembled.data.data = net::Span{reinterpret_cast<uint8_t*>(const_cast<char*>(packet.data())), packet.size()};
 		g_netLibrary->SendNetPacket(reassembled, false);
+	}
+
+	void SendPacketV2(int target, net::packet::ReassembledEventV2Packet& packet) override
+	{
+		g_netLibrary->SendNetPacket(packet, false);
 	}
 } g_eventSink;
 

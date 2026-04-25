@@ -1,8 +1,7 @@
 .root {
   @include ui.border-radius('normal');
 
-  @include ui.def('backdrop-color', ui.color-token('backdrop-300'));
-  @include ui.fake-backdrop-blur();
+  background-color: ui.color('main', 50);
 
   cursor: pointer;
 
@@ -85,4 +84,37 @@
       color: ui.color-token('text-a50');
     }
   }
+}
+
+.serverpowerbutton {
+  border-radius: 0 ui.q(1) ui.q(1) 0;
+  border-left: 1px solid #9EA4BD;
+  background-color: ui.color-token('button-background');
+
+  &:disabled {
+    border-left: 2px solid #9EA4BD;
+    background-color: ui.color-token('button-background');
+    cursor: default;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+  }
+}
+
+.serverboostbutton {
+  border: none;
+
+  &:hover {
+    background-color: ui.color-token('backdrop');
+    cursor: pointer;
+  }
+
+  &:disabled {
+    background-color: ui.color-token('button-background');
+    cursor: default;
+  }
+}
+
+.serverboostbutton-active {
+  border-radius: ui.q(1) 0 0 ui.q(1);
 }

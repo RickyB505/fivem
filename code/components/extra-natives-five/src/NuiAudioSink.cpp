@@ -1307,7 +1307,7 @@ extern "C"
 class MumbleAudioEntityBase
 {
 public:
-	MumbleAudioEntityBase(const std::wstring& name)
+	MumbleAudioEntityBase(const std::string& name)
 		: m_position(rage::Vec3V{ 0.f, 0.f, 0.f }),
 		  m_positionForce(rage::Vec3V{ 0.f, 0.f, 0.f }),
 		  m_buffer(nullptr),
@@ -1389,7 +1389,7 @@ protected:
 
 	CPed* m_ped;
 
-	std::wstring m_name;
+	std::string m_name;
 
 	std::function<void(int)> m_poller;
 };
@@ -1398,7 +1398,7 @@ template<int Build>
 class MumbleAudioEntity : public rage::audEntity<Build>, public MumbleAudioEntityBase, public std::enable_shared_from_this<MumbleAudioEntity<Build>>
 {
 public:
-	MumbleAudioEntity(const std::wstring& name)
+	MumbleAudioEntity(const std::string& name)
 		: MumbleAudioEntityBase(name)
 	{
 	}
@@ -1511,6 +1511,16 @@ void MumbleAudioEntity<Build>::MInit(float overrideVolume)
 {
 	std::lock_guard _(m_render);
 	m_environmentGroup = naEnvironmentGroup::Create();
+
+	// Some malicious clients can spam ped scenarios, indirectly exhausting
+	// the global audio EnvironmentGroup pool. When the pool is full,
+	// Create() may return nullptr. Previously this caused a crash because
+	// voice setup assumed the pointer was always valid.
+	if (m_environmentGroup == nullptr)
+	{
+		return;
+	}
+	
 	m_environmentGroup->Init(nullptr, 20.0f, 1000, 4000, 0.5f, 1000);
 	m_environmentGroup->SetPosition(m_position);
 
@@ -1821,7 +1831,7 @@ class MumbleAudioSink : public IMumbleAudioSink
 public:
 	void Process();
 
-	MumbleAudioSink(const std::wstring& name);
+	MumbleAudioSink(const std::string& name);
 	virtual ~MumbleAudioSink() override;
 
 	virtual void SetPollHandler(const std::function<void(int)>& poller) override;
@@ -1833,7 +1843,7 @@ public:
 	void Reset();
 
 private:
-	std::wstring m_name;
+	std::string m_name;
 	int m_serverId;
 
 	/// <summary>
@@ -1860,11 +1870,9 @@ static std::set<MumbleAudioSink*> g_sinks;
 static std::shared_mutex g_submixMutex;
 static std::map<int, int> g_submixIds;
 
-MumbleAudioSink::MumbleAudioSink(const std::wstring& name)
-	: m_serverId(-1), m_position(rage::Vec3V{ 0.f, 0.f, 0.f }), m_distance(5.0f), m_overrideVolume(-1.0f), m_name(name)
+MumbleAudioSink::MumbleAudioSink(const std::string& userName)
+	: m_serverId(-1), m_position(rage::Vec3V{ 0.f, 0.f, 0.f }), m_distance(5.0f), m_overrideVolume(-1.0f), m_name(userName)
 {
-	auto userName = ToNarrow(name);
-
 	if (userName.length() >= 2)
 	{
 		int serverId = atoi(userName.substr(1, userName.length() - 1).c_str());
@@ -2228,13 +2236,60 @@ DLL_IMPORT void ForceMountDataFile(const std::pair<std::string, std::string>& da
 
 static uint32_t* g_preferenceArray;
 
-// Outdated as of b2944, we're mapping indexes now.
-enum AudioPrefs
+// Virtual mapping - incomplete - function order
+enum eMenuPref
 {
-	PREF_SFX_VOLUME = 7,
-	PREF_MUSIC_VOLUME = 8,
-	PREF_MUSIC_VOLUME_IN_MP = 0x25,
+	PREF_SFX_VOLUME,
+	PREF_MUSIC_VOLUME,
+	PREF_MUSIC_VOLUME_IN_MP,
+	PREF_SPEAKER_OUTPUT,
+	PREF_INTERACTIVE_MUSIC,
+	PREF_RADIO_STATION,
+	PREF_DIAG_BOOST,
+	PREF_SS_FRONT,
+	PREF_SS_REAR,
+	PREF_VOICE_OUTPUT,
+	PREF_UR_AUTOSCAN,
+	PREF_UR_PLAYMODE,
+	PREF_VIRTUAL_MAX // NOT A GAME ENUM
 };
+
+static std::array<uint8_t, PREF_VIRTUAL_MAX> voicePrefEnums;
+
+static int MapPrefsEnum(const int index)
+{
+	return voicePrefEnums[index];
+}
+
+static void GetDynamicAudioPrefEnums()
+{
+	uint8_t inserted = 0;
+	uint8_t offset = 0xFF;
+
+	auto instructionPtr = hook::get_pattern<uint8_t>("48 89 5C 24 ? 57 48 83 EC ? BF ? ? ? ? 44 8B C7");
+
+	while (inserted < PREF_VIRTUAL_MAX)
+	{
+		if (instructionPtr[0] == 0xBF && offset == 0xFF)
+		{
+			assert(inserted == 0);
+			offset = instructionPtr[1];
+		}
+
+		if (instructionPtr[0] == 0x8D && instructionPtr[1] == 0x4F)
+		{
+			assert(offset != 0xFF && inserted < PREF_VIRTUAL_MAX);
+
+			const uint8_t enumVal = offset + instructionPtr[2];
+
+			voicePrefEnums[inserted++] = enumVal;
+		}
+
+		++instructionPtr;
+	}
+
+	assert(inserted == PREF_VIRTUAL_MAX);
+}
 #endif
 #ifdef GTA_FIVE
 static bool (*g_origLoadCategories)(void* a1, const char* why, const char* filename, int a4, int version, bool, void*);
@@ -2305,6 +2360,7 @@ static HookFunction hookFunction([]()
 {
 #ifdef GTA_FIVE
 	g_preferenceArray = hook::get_address<uint32_t*>(hook::get_pattern("48 8D 15 ? ? ? ? 8D 43 01 83 F8 02 77 2D", 3));
+	GetDynamicAudioPrefEnums();
 #endif
 	{
 #ifdef GTA_FIVE
@@ -2485,18 +2541,6 @@ static HookFunction hookFunction([]()
 });
 
 rage::audDspEffect* MakeRadioFX();
-
-#ifdef GTA_FIVE
-static int MapPrefsEnum(int index)
-{
-	if (index >= 2 && xbr::IsGameBuildOrGreater<2944>())
-	{
-		index++;
-	}
-
-	return index;
-}
-#endif
 
 static InitFunction initFunction([]()
 {
@@ -2706,10 +2750,10 @@ static InitFunction initFunction([]()
 
 	OnGameFrame.Connect([]()
 	{
-		static ConVar<bool> arenaWarVariable("ui_disableMusicTheme", ConVar_Archive, false);
+		static ConVar<bool> arenaWarVariable("ui_disableMusicTheme", ConVar_Archive | ConVar_UserPref, false);
 #ifdef GTA_FIVE
-		static ConVar<bool> arenaWarVariableForce("ui_forceMusicTheme", ConVar_Archive, false);
-		static ConVar<std::string> musicThemeVariable("ui_selectMusic", ConVar_Archive, "dlc_awxm2018_theme_5_stems");
+		static ConVar<bool> arenaWarVariableForce("ui_forceMusicTheme", ConVar_Archive | ConVar_UserPref, false);
+		static ConVar<std::string> musicThemeVariable("ui_selectMusic", ConVar_Archive | ConVar_UserPref, "dlc_awxm2018_theme_5_stems");
 		static std::string lastSong = musicThemeVariable.GetValue();
 
 		static rage::audSound* g_sound;
@@ -2888,7 +2932,7 @@ static InitFunction initFunction([]()
 		ProcessAudioSinks();
 	});
 
-	OnGetMumbleAudioSink.Connect([](const std::wstring& name, fwRefContainer<IMumbleAudioSink>* sink)
+	OnGetMumbleAudioSink.Connect([](const std::string& name, fwRefContainer<IMumbleAudioSink>* sink)
 	{
 		fwRefContainer<MumbleAudioSink> ref = new MumbleAudioSink(name);
 		*sink = ref;
@@ -2919,3 +2963,4 @@ static InitFunction initFunction([]()
 });
 
 rage::audMixerDevice** rage::audDriver::sm_Mixer;
+

@@ -38,12 +38,19 @@
 
 #include "DeferredInitializer.h"
 #include "EntitySystem.h"
+#include "GameValueStub.h"
+#include <CrashFixes.FakeParachuteProp.h>
 
 using namespace winrt::Windows::Gaming::Input;
 
 static hook::cdecl_stub<void(void*, int, float, float, float, bool, bool)> breakOffVehicleWheel([]
 {
 	return hook::get_call(hook::get_pattern("F3 44 0F 11 4C 24 ? E8 ? ? ? ? EB 7A", 7));
+});
+
+static hook::cdecl_stub<bool(void*, int)> getWheelBroken([]
+{
+	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 48 8B CD 41 88 84 1F"));
 });
 
 static hook::cdecl_stub<void(void*, bool)> switchEngineOff([]
@@ -54,6 +61,11 @@ static hook::cdecl_stub<void(void*, bool)> switchEngineOff([]
 static hook::cdecl_stub<bool(void*)> isDriverAPlayer([]
 {
 	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 84 C0 74 ? 83 BE ? ? ? ? ? 75 ? F3 0F 59 35"));
+});
+
+static hook::cdecl_stub<void(void*, int)> setTrainState([]
+{
+	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 4C 89 AF ? ? ? ? 49 8B 0F"));
 });
 
 struct PatternPair
@@ -105,7 +117,7 @@ struct VehicleDashboardData
 	float temp;
 	float vacuum;
 	float boost;
-	float waterTemp;
+	float currentGear;
 	float oilTemp;
 	float oilPressure;
 	char _pad[0x3F]; // aircraft data
@@ -237,6 +249,7 @@ static void writeVehicleMemory(fx::ScriptContext& context, std::string_view nn)
 }
 
 static float* PassengerMassPtr;
+static GameValueStub<float> SnowGripFactor;
 
 static int StreamRenderGfxPtrOffset;
 static int HandlingDataPtrOffset;
@@ -264,6 +277,7 @@ static int IsAlarmSetOffset;
 static int AlarmTimeLeftOffset;
 static int WheelieStateOffset;
 static int TrainTrackNodeIndexOffset;
+static int TrainTrackIndexOffset;
 static int PreviouslyOwnedByPlayerOffset;
 static int NeedsToBeHotwiredOffset;
 static int IsInteriorLightOnOffset;
@@ -281,6 +295,7 @@ static int VisualHeightSetOffset = 0x07C;
 static int LightMultiplierGetOffset;
 static int VehiclePitchBiasOffset;
 static int VehicleRollBiasOffset;
+static int VehicleFlagsOffset;
 
 static int VehicleDamageParentOffset;
 static int VehicleHandlingOffset;
@@ -316,6 +331,12 @@ static int VehicleDamageStructOffset;
 static bool* g_trainsForceDoorsOpen;
 static int TrainDoorCountOffset;
 static int TrainDoorArrayPointerOffset;
+static int TrainFlagOffset;
+static int TrainStateOffset;
+static int TrainCruiseSpeedOffset;
+static int TrainSpeedOffset;
+
+constexpr int TrainStopAtStationsFlag = 4;
 
 static int VehicleRepairMethodVtableOffset;
 
@@ -324,6 +345,10 @@ static std::unordered_set<void*> g_deletionTraces2;
 
 static bool g_isFuelConsumptionOn = false;
 static float g_globalFuelConsumptionMultiplier = 1.f;
+
+static bool g_disableReactToSirens = false;
+static bool g_disableReactToSirensBySwerving = false;
+static uint32_t g_overrideReactionToSiren = 2;
 
 static void(*g_origDeleteVehicle)(void* vehicle);
 
@@ -537,6 +562,14 @@ void ProcessFuelConsumption(void* cVehicleDamage, float timeStep)
 		return;
 	}
 
+	uint8_t vehicleEngineRunningFlags = readValue<uint8_t>(vehicle, VehicleEngineRunningFlagsOffset);
+    bool isEngineOn = vehicleEngineRunningFlags & VehicleFlagsEngineRunningFlag;
+
+	if (!isEngineOn)
+    {
+        return;
+    }
+
 	// Adjust fuel consumption rate so when g_globalFuelConsumptionMultiplier is 1 it gives reasonable fuel consumption speed.
 	const float NORMALIZE_GLOBAL_CONSUMPTION_RATE = 0.01f;
 	void* handling = readValue<void*>(vehicle, VehicleHandlingOffset);
@@ -548,8 +581,6 @@ void ProcessFuelConsumption(void* cVehicleDamage, float timeStep)
 
 	if (newPetrolTankLevel <= 0.f)
 	{
-		uint8_t vehicleEngineRunningFlags = readValue<uint8_t>(vehicle, VehicleEngineRunningFlagsOffset);
-		bool isEngineOn = vehicleEngineRunningFlags & VehicleFlagsEngineRunningFlag;
 		if (isEngineOn)
 		{
 			switchEngineOff(vehicle, true);
@@ -557,6 +588,26 @@ void ProcessFuelConsumption(void* cVehicleDamage, float timeStep)
 	}
 
 	SetVehicleFuelLevel(vehicle, std::max(newPetrolTankLevel, 0.f));
+}
+
+static void (*g_origReactToSirens)(CVehicle*);
+void ReactToSirens(CVehicle* vehicle)
+{
+	if (g_disableReactToSirens)
+	{
+		return;
+	}
+	g_origReactToSirens(vehicle);
+}
+
+static uintptr_t (*g_origCTaskVehicleReactToCopSiren_ctor)(void*, uint32_t, uint32_t);
+uintptr_t CTaskVehicleReactToCopSiren_ctor(void* thisPtr, uint32_t reaction, uint32_t time)
+{
+	if (g_disableReactToSirensBySwerving)
+	{
+		reaction = g_overrideReactionToSiren;
+	}
+	return g_origCTaskVehicleReactToCopSiren_ctor(thisPtr, reaction, time);
 }
 
 static HookFunction initFunction([]()
@@ -579,15 +630,20 @@ static HookFunction initFunction([]()
 		EngineTempOffset = *hook::get_pattern<uint32_t>("48 8D 8F ? ? ? ? 45 32 FF", -4);
 		SteeringScaleOffset = *hook::get_pattern<uint32_t>("41 8B 80 ? ? ? ? C1 E8 ? 40 84 C5 74", 18);
 		WheelieStateOffset = *hook::get_pattern<uint32_t>("8B 87 ? ? ? ? 48 8B 57 ? 89 87", 39);
-		TrainTrackNodeIndexOffset = *hook::get_pattern<uint32_t>("E8 ? ? ? ? 40 8A F8 84 C0 75 ? 48 8B CB E8", -4);
+		TrainTrackNodeIndexOffset = *hook::get_pattern<uint32_t>("89 83 ? ? ? ? E8 ? ? ? ? 40 8A F8", 2);
 		StreamRenderGfxPtrOffset = *hook::get_pattern<uint32_t>("4C 8D 48 ? 80 E1 01", -4);
 		DrawnWheelAngleMultOffset = *hook::get_pattern<uint32_t>("48 8B C8 E8 ? ? ? ? 84 C0 74 ? F3 0F 10 83", 33);
 		VehicleTopSpeedModifierPtr = hook::get_pattern<char>("48 8B D9 48 81 C1 ? ? ? ? 48 89 5C 24 28 44 0F 29 40 C8");
 		VehicleCheatPowerIncreaseOffset = *hook::get_pattern<uint32_t>("E8 ? ? ? ? 8B 83 ? ? ? ? C7 83", 23);
 		WheelSurfaceMaterialOffset = *hook::get_pattern<uint32_t>("48 8B 4A 10 0F 28 CF F3 0F 59 05", -4);
 		WheelHealthOffset = *hook::get_pattern<uint32_t>("75 24 F3 0F 10 ? ? ? 00 00 F3 0F", 6);
-		LightMultiplierGetOffset = *hook::get_pattern<uint32_t>("00 00 48 8B CE F3 0F 59 ? ? ? 00 00 F3 41", 9);
+		LightMultiplierGetOffset = *hook::get_pattern<uint32_t>("00 00 48 8B ? F3 0F 59 ? ? ? 00 00 F3 41", 9);
 		VehicleRepairMethodVtableOffset = *hook::get_pattern<uint32_t>("C1 E8 19 A8 01 74 ? 48 8B 81", -14);
+		TrainFlagOffset = *hook::get_pattern<uint32_t>("80 8B ? ? ? ? ? 8B 05 ? ? ? ? FF C8", 2);
+		TrainStateOffset = *hook::get_pattern<uint32_t>("89 91 ? ? ? ? 80 3D ? ? ? ? ? 0F 84", 2);
+		TrainCruiseSpeedOffset = *hook::get_pattern<uint32_t>("C7 87 ? ? ? ? ? ? ? ? E8 ? ? ? ? 4C 89 AF", 2);
+		TrainSpeedOffset = *hook::get_pattern<uint32_t>("4C 89 AF ? ? ? ? 44 89 AF ? ? ? ? 4C 89 AF ? ? ? ? 49 8B 0E", 3);
+		TrainTrackIndexOffset = *hook::get_pattern<uint32_t>("8A 8F ? ? ? ? F3 41 0F 58 CB", 2);
 	}
 
 	{
@@ -724,7 +780,7 @@ static HookFunction initFunction([]()
 		g_trainsForceDoorsOpen = (bool*)hook::AllocateStubMemory(1);
 		*g_trainsForceDoorsOpen = true;
 
-		auto location = hook::get_pattern<uint32_t>("74 56 40 38 BB ? ? ? ? 74 49 48 8B CB E8", -8);
+		auto location = hook::get_pattern<uint32_t>("40 38 3D ? ? ? ? 40 88 75", 3);
 		hook::put<int32_t>(location, (intptr_t)g_trainsForceDoorsOpen - (intptr_t)location - 4);
 	}
 
@@ -756,8 +812,22 @@ static HookFunction initFunction([]()
 	}
 
 	{
+		auto location = hook::get_pattern<char>("48 85 C0 74 3C 8B 80 ? ? ? ? C1 E8 0F");
+		VehicleFlagsOffset = *(uint32_t*)(location + 7);
+	}
+
+	{
 		auto location = hook::get_pattern<char>("F3 0F 59 3D ? ? ? ? F3 0F 58 3D ? ? ? ? 48 85 C9", 4);
 		PassengerMassPtr = hook::get_address<float*>(location);
+	}
+
+	{
+		auto location = hook::get_pattern<uint32_t>("F3 0F 59 05 ? ? ? ? 48 23 C8", 4);
+		SnowGripFactor.Init(*hook::get_address<float*>(location));
+		SnowGripFactor.SetLocation(location);
+
+		location = hook::get_pattern<uint32_t>("F3 0F 59 05 ? ? ? ? 8B 42", 4);
+		SnowGripFactor.SetLocation(location);
 	}
 
 	{
@@ -938,9 +1008,9 @@ static HookFunction initFunction([]()
 		context.SetResult<float>(g_DashboardData.boost);
 	});
 
-	fx::ScriptEngine::RegisterNativeHandler("GET_VEHICLE_DASHBOARD_WATER_TEMP", [](fx::ScriptContext& context)
+	fx::ScriptEngine::RegisterNativeHandler("GET_VEHICLE_DASHBOARD_CURRENT_GEAR", [](fx::ScriptContext& context)
 	{
-		context.SetResult<float>(g_DashboardData.waterTemp);
+		context.SetResult<float>(g_DashboardData.currentGear);
 	});
 
 	fx::ScriptEngine::RegisterNativeHandler("GET_VEHICLE_DASHBOARD_OIL_PRESSURE", [](fx::ScriptContext& context)
@@ -1380,6 +1450,43 @@ static HookFunction initFunction([]()
 		}
 	});
 
+	fx::ScriptEngine::RegisterNativeHandler("GET_VEHICLE_HAS_FLAG", [](fx::ScriptContext& context)
+	{
+		int flagIndex = context.GetArgument<int>(1);
+
+		if (flagIndex < 0 || flagIndex >= 256)
+		{
+			return;
+		}
+
+		if (fwEntity* vehicle = getAndCheckVehicle(context, "GET_VEHICLE_HAS_FLAG"))
+		{
+			auto addr = readValue<uint64_t>(vehicle, ModelInfoPtrOffset);
+			auto flagBlocks = reinterpret_cast<std::bitset<256>*>(addr + VehicleFlagsOffset);
+			
+			context.SetResult<bool>(flagBlocks->test(flagIndex));
+		}
+	});
+
+	fx::ScriptEngine::RegisterNativeHandler("SET_VEHICLE_FLAG", [](fx::ScriptContext& context)
+	{
+		int flagIndex = context.GetArgument<int>(1);
+		bool value = context.GetArgument<bool>(2);
+		
+		if (flagIndex < 0 || flagIndex >= 256)
+		{
+			return;
+		}
+
+		if (fwEntity* vehicle = getAndCheckVehicle(context, "SET_VEHICLE_FLAG"))
+		{
+			auto addr = readValue<uint64_t>(vehicle, ModelInfoPtrOffset);
+			auto flagBlocks = reinterpret_cast<std::bitset<256>*>(addr + VehicleFlagsOffset);
+
+			flagBlocks->set(flagIndex, value);
+		}
+	});
+
 	fx::ScriptEngine::RegisterNativeHandler("IS_VEHICLE_WANTED", std::bind(readVehicleMemoryBit<&IsWantedOffset, 3>, _1, "IS_VEHICLE_WANTED"));
 
 	fx::ScriptEngine::RegisterNativeHandler("IS_VEHICLE_PREVIOUSLY_OWNED_BY_PLAYER", std::bind(readVehicleMemoryBit<&PreviouslyOwnedByPlayerOffset, 1>, _1, "IS_VEHICLE_PREVIOUSLY_OWNED_BY_PLAYER"));
@@ -1466,6 +1573,33 @@ static HookFunction initFunction([]()
 		GetTrainDoor(train, doorIndex)->ratio = ratio;
 	}));
 
+	fx::ScriptEngine::RegisterNativeHandler("SET_TRAIN_STOP_AT_STATIONS", std::bind(writeVehicleMemoryBit<&TrainFlagOffset, TrainStopAtStationsFlag>, _1, "SET_TRAIN_STOP_AT_STATIONS"));
+
+	fx::ScriptEngine::RegisterNativeHandler("DOES_TRAIN_STOP_AT_STATIONS", std::bind(readVehicleMemoryBit<&TrainFlagOffset, TrainStopAtStationsFlag>, _1, "DOES_TRAIN_STOP_AT_STATIONS"));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_DIRECTION", std::bind(readVehicleMemoryBit<&TrainFlagOffset, 3>, _1, "GET_TRAIN_DIRECTION"));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_STATE", std::bind(readVehicleMemory<int, &TrainStateOffset>, _1, "GET_TRAIN_STATE")); 
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_CRUISE_SPEED", std::bind(readVehicleMemory<float, &TrainCruiseSpeedOffset>, _1, "GET_TRAIN_CRUISE_SPEED"));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_SPEED", std::bind(readVehicleMemory<float, &TrainSpeedOffset>, _1, "GET_TRAIN_SPEED"));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_TRACK_INDEX", std::bind(readVehicleMemory<uint8_t, &TrainTrackIndexOffset>, _1, "GET_TRAIN_TRACK_INDEX"));
+
+	fx::ScriptEngine::RegisterNativeHandler("SET_TRAIN_STATE", makeTrainFunction([](fx::ScriptContext& context, fwEntity* train)
+	{
+		int state = context.GetArgument<int>(1);
+
+		if (state < 0 || state > 5)
+		{
+			return;
+		}
+
+		// This resets a timer used to ensure train states don't get stuck for too long. 
+		setTrainState(train, state);
+	}));
+
 	fx::ScriptEngine::RegisterNativeHandler("GET_VEHICLE_WHEEL_X_OFFSET", makeWheelFunction([](fx::ScriptContext& context, fwEntity* vehicle, uintptr_t wheelAddr)
 	{
 		context.SetResult<float>(*reinterpret_cast<float*>(wheelAddr + WheelXOffsetOffset));
@@ -1539,6 +1673,17 @@ static HookFunction initFunction([]()
 	fx::ScriptEngine::RegisterNativeHandler("GET_GLOBAL_PASSENGER_MASS_MULTIPLIER", [](fx::ScriptContext& context)
 	{
 		context.SetResult<float>(*PassengerMassPtr);
+	});
+
+	fx::ScriptEngine::RegisterNativeHandler("SET_VEHICLE_XMAS_SNOW_FACTOR", [](fx::ScriptContext& context)
+	{
+		const auto gripFactor = context.GetArgument<float>(0);
+		SnowGripFactor.Set(std::isnan(gripFactor) ? 0.0f : std::clamp(gripFactor, 0.0f, 2.0f));
+	});
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_VEHICLE_XMAS_SNOW_FACTOR", [](fx::ScriptContext& context)
+	{
+		context.SetResult<float>(SnowGripFactor.Get());
 	});
 
 	static struct : jitasm::Frontend
@@ -1620,6 +1765,11 @@ static HookFunction initFunction([]()
 		g_globalFuelConsumptionMultiplier = 1.f;
 
 		*PassengerMassPtr = 0.05f;
+		SnowGripFactor.Reset();
+
+		g_disableReactToSirens = false;
+		g_disableReactToSirensBySwerving = false;
+		g_overrideReactionToSiren = 2;
 	});
 
 	fx::ScriptEngine::RegisterNativeHandler("SET_VEHICLE_AUTO_REPAIR_DISABLED", [](fx::ScriptContext& context)
@@ -1757,7 +1907,7 @@ static HookFunction initFunction([]()
 		} vehicleHighbeamsColorStub;
 
 		{
-			auto location = hook::get_pattern("F3 0F 11 55 80 0F C6 CA AA", 13);
+			auto location = hook::get_pattern("F3 0F 11 55 ? 0F C6 CA ? 0F C6 D2", 13);
 			hook::nop(location, 10);
 			hook::call(location, vehicleHighbeamsColorStub.GetCode());
 		}
@@ -1841,6 +1991,22 @@ static HookFunction initFunction([]()
 		}
 	});
 
+	fx::ScriptEngine::RegisterNativeHandler("IS_VEHICLE_WHEEL_BROKEN_OFF", [](fx::ScriptContext& context)
+	{
+		if (fwEntity* vehicle = getAndCheckVehicle(context, "IS_VEHICLE_WHEEL_BROKEN_OFF"))
+		{
+			auto wheelIndex = context.GetArgument<uint32_t>(1);
+			auto numWheels = readValue<unsigned char>(vehicle, NumWheelsOffset);
+
+			if (wheelIndex >= numWheels)
+			{
+				return;
+			}
+
+			context.SetResult<bool>(getWheelBroken(vehicle, wheelIndex));
+		}
+	});
+
 	fx::ScriptEngine::RegisterNativeHandler("SET_FUEL_CONSUMPTION_STATE", [](fx::ScriptContext& context)
 	{
 		g_isFuelConsumptionOn = context.GetArgument<bool>(0);
@@ -1868,6 +2034,41 @@ static HookFunction initFunction([]()
 			context.SetResult<bool>(DoesVehicleUseFuel(vehicle));
 		}
 	});
+
+	fx::ScriptEngine::RegisterNativeHandler("ADD_AUTHORIZED_PARACHUTE_MODEL", [](fx::ScriptContext& context)
+	{
+		uint32_t modelHash = context.GetArgument<uint32_t>(0);
+		AddAuthorizedParachuteModel(modelHash);
+	});
+
+	fx::ScriptEngine::RegisterNativeHandler("ADD_AUTHORIZED_PARACHUTE_PACK_MODEL", [](fx::ScriptContext& context)
+	{
+		uint32_t modelHash = context.GetArgument<uint32_t>(0);
+		AddAuthorizedParachutePackModel(modelHash);
+	});
+
+	fx::ScriptEngine::RegisterNativeHandler("SET_REACTION_TO_VEHICLE_SIREN_DISABLED", [](fx::ScriptContext& context)
+	{
+		g_disableReactToSirens = context.GetArgument<bool>(0);
+	});
+
+	fx::ScriptEngine::RegisterNativeHandler("OVERRIDE_REACTION_TO_VEHICLE_SIREN", [](fx::ScriptContext& context)
+	{
+		uint32_t reaction = context.GetArgument<uint32_t>(1);
+
+		if (g_overrideReactionToSiren < 0 || g_overrideReactionToSiren > 2)
+		{
+			return;
+		}
+
+		g_disableReactToSirensBySwerving = context.GetArgument<bool>(0);
+		g_overrideReactionToSiren = reaction;
+	});
+
+	{
+		g_origReactToSirens = hook::trampoline(hook::get_call(hook::get_pattern("E8 ? ? ? ? 8B 8E ? ? ? ? 8D 41 F8 83 F8 01")), ReactToSirens);
+		g_origCTaskVehicleReactToCopSiren_ctor = hook::trampoline(hook::get_call(hook::get_pattern("8B D3 48 8B C8 E8 ? ? ? ? 48 8B 9F ? ? ? ? 45 33 C9", 5)), CTaskVehicleReactToCopSiren_ctor);
+	}
 
 	MH_Initialize();
 	MH_CreateHook(hook::get_pattern("E8 ? ? ? ? 8A 83 DA 00 00 00 24 0F 3C 02", -0x32), DeleteVehicleWrap, (void**)&g_origDeleteVehicle);

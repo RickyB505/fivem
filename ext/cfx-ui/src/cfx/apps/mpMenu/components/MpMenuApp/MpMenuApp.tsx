@@ -1,18 +1,18 @@
 import { observer } from 'mobx-react-lite';
 import { Outlet } from 'react-router-dom';
 
-import { AuthFlyout } from 'cfx/apps/mpMenu/parts/AuthFlyout/AuthFlyout';
+import { AuthModal } from 'cfx/apps/mpMenu/parts/AuthModal/AuthModal';
 import { LegacyConnectingModal } from 'cfx/apps/mpMenu/parts/LegacyConnectingModal/LegacyConnectingModal';
 import { LegacyUiMessageModal } from 'cfx/apps/mpMenu/parts/LegacyUiMessageModal/LegacyUiMessageModal';
 import { LegalAccepter } from 'cfx/apps/mpMenu/parts/LegalAccepter/LegalAccepter';
 import { NavBar } from 'cfx/apps/mpMenu/parts/NavBar/NavBar';
 import { ServerBoostModal } from 'cfx/apps/mpMenu/parts/ServerBoostModal/ServerBoostModal';
 import { SettingsFlyout } from 'cfx/apps/mpMenu/parts/SettingsFlyout/SettingsFlyout';
-import { ThemeManager } from 'cfx/apps/mpMenu/parts/ThemeManager/ThemeManager';
 import { useLegalService } from 'cfx/apps/mpMenu/services/legal/legal.service';
 
 import { NavigationTracker } from './PageViewTracker';
 import { AcitivityItemMediaViewerProvider } from '../AcitivityItemMediaViewer/AcitivityItemMediaViewer.context';
+import { ChangesNoticeModal } from '../ChangesNoticeModal/ChangesNoticeModal';
 
 import s from './MpMenuApp.module.scss';
 
@@ -21,7 +21,8 @@ function MpMenuUI() {
     <>
       <NavigationTracker />
 
-      <AuthFlyout />
+      <AuthModal />
+      <ChangesNoticeModal />
       <SettingsFlyout />
 
       <LegacyConnectingModal />
@@ -44,16 +45,14 @@ export const MpMenuApp = observer(function MpMenuApp() {
   const legalService = useLegalService();
   const mainUI = legalService.hasUserAccepted
     ? (
-      <MpMenuUI />
+        <MpMenuUI />
       )
     : (
-      <LegalAccepter />
+        <LegalAccepter />
       );
 
   return (
     <AcitivityItemMediaViewerProvider>
-      <ThemeManager />
-
       {mainUI}
     </AcitivityItemMediaViewerProvider>
   );

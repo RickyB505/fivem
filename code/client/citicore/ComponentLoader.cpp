@@ -101,7 +101,7 @@ void ComponentLoader::InitializeWithString(std::string_view cacheBuf)
 		// don't load some useless stuff for ChromeBrowser
 		if (wcsstr(moduleName, L"ChromeBrowser"))
 		{
-			if (nameWide != L"nui-core" && nameWide != L"vfs-core")
+			if (nameWide != L"nui-core" && nameWide != L"vfs-core" && nameWide != L"net-base")
 			{
 				continue;
 			}
@@ -114,7 +114,7 @@ void ComponentLoader::InitializeWithString(std::string_view cacheBuf)
 		if (wcsstr(moduleName, L"_ROS"))
 		{
 			neededComponentsList = {
-				L"ros-patches-five",
+				L"legitimacy",
 				L"net-http-server",
 				L"net-tcp-server",
 				L"net-base",
@@ -236,7 +236,7 @@ void ComponentLoader::InitializeWithString(std::string_view cacheBuf)
 		auto comp = LoadComponent(componentName.c_str());
 		if (!comp.GetRef())
 		{
-			FatalError("Could not load component %s.", comp->GetName().c_str());
+			FatalErrorNoReport("Could not load component %s.", comp->GetName().c_str());
 		}
 
 		m_loadedComponents.push_back(comp);
@@ -282,7 +282,7 @@ static void LoadDependencies(ComponentLoader* loader, fwRefContainer<ComponentDa
 			}
 		}
 
-		if (!match && dependency.GetCategory() != "vendor")
+		if (!match && dependency.GetCategory() != "vendor" && dependency.GetCategory() != "legitimacy")
 		{
 			FatalError("Unable to resolve dependency for %s.\n", dependency.GetString().c_str());
 		}

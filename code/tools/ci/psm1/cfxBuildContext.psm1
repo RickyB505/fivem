@@ -33,10 +33,13 @@ class CfxBuildContext {
     [string] $PrivateRoot = ""
     [string] $PrivateUri = ""
 
+	[string] $ClosedRoot = ""
+	[string] $ClosedUri = ""
+
     [string] $ToolkitRoot = ""
     [string] $ToolkitUri = ""
 
-    [string] $SentryOrgName = "citizenfx"
+    [string] $SentryOrgName = $env:CFX_SENTRY_ORG_NAME
     [string] $SentryProjectName
 
     [string] getPathInProject([string] $relativePath) {
@@ -137,6 +140,15 @@ function Get-CfxBuildContext {
         throw "Public build requires FIVEM_PRIVATE_URI env var to be defined"
     }
 
+    # Figure out closed
+    if ($env:FIVEM_CLOSED_URI) {
+        $ctx.ClosedRoot = $ctx.getPathInBuildCache("fivem-closed")
+        $ctx.ClosedUri = $env:FIVEM_CLOSED_URI
+    }
+    elseif ($ctx.IsPublicBuild) {
+        throw "Public build requires FIVEM_CLOSED_URI env var to be defined"
+    }
+
     # Figure out toolkit
     if ($env:CFX_BUILD_TOOLKIT_URI) {
         $ctx.ToolkitRoot = $ctx.getPathInBuildCache("cfx-build-toolkit")
@@ -155,7 +167,7 @@ function Get-CfxBuildContext {
             $ctx.ProductName = "fivem"
             $ctx.ProductExeName = "FiveM.exe"
             $ctx.PremakeGameName = "five"
-            $ctx.SentryProjectName = Get-EnvOrDefault $env:CFX_SENTRY_PROJECT_NAME_FIVEM "fivem-client-1604"
+            $ctx.SentryProjectName = $env:CFX_SENTRY_PROJECT_NAME_FIVEM
 
             break
         }
@@ -165,7 +177,7 @@ function Get-CfxBuildContext {
             $ctx.ProductName = "redm"
             $ctx.ProductExeName = "CitiLaunch.exe"
             $ctx.PremakeGameName = "rdr3"
-            $ctx.SentryProjectName = Get-EnvOrDefault $env:CFX_SENTRY_PROJECT_NAME_REDM "redm"
+            $ctx.SentryProjectName = $env:CFX_SENTRY_PROJECT_NAME_REDM
 
             break
         }
@@ -175,7 +187,7 @@ function Get-CfxBuildContext {
             $ctx.ProductName = "fxserver"
             $ctx.ProductExeName = "FXServer.exe"
             $ctx.PremakeGameName = "server"
-            $ctx.SentryProjectName = Get-EnvOrDefault $env:CFX_SENTRY_PROJECT_NAME_FXSERVER "fxserver"
+            $ctx.SentryProjectName = $env:CFX_SENTRY_PROJECT_NAME_FXSERVER
 
             $premakeDirSubpath = "windows\"
 

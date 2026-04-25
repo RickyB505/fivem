@@ -1,4 +1,4 @@
-﻿#include "StdInc.h"
+#include "StdInc.h"
 
 #include "ServerGameStatePublicInstance.h"
 
@@ -95,6 +95,16 @@ public:
 	void HandleGameStateAck(fx::ServerInstanceBase* instance, const fx::ClientSharedPtr& client, net::packet::ClientGameStateAck& buffer) override
 	{
 		gameStateAckLastCall.emplace(client, buffer.GetFrameIndex(), std::vector<net::packet::ClientGameStateNAck::IgnoreListEntry>{ buffer.GetIgnoreList().begin(), buffer.GetIgnoreList().end() }, std::vector<uint16_t>{ buffer.GetRecreateList().begin(), buffer.GetRecreateList().end() });
+	}
+
+	bool GetStateBagStrictMode() const override
+	{
+		return false;
+	}
+
+	bool IsNetGameEventBlocked(uint32_t eventNameHash) override
+	{
+		return false;
 	}
 };
 

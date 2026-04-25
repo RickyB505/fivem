@@ -38,7 +38,7 @@ try {
     }.GetNewClosure()
 
     Invoke-LogSection "Submodules Setup" {
-        Invoke-SetupSubmodules -Context $ctx
+        Invoke-SetupSubmodules -Root $ctx.ProjectRoot
     }.GetNewClosure()
 
     Invoke-LogSection "CEF Setup" {
@@ -79,7 +79,7 @@ try {
         Invoke-LogSection "Creating sentry release" {
             $sentryVersion = "cfx-{0}" -f $versions.BuildID
 
-            Invoke-SentryCreateRelease -Context $ctx -Version $sentryVersion
+            Invoke-SentryCreateRelease -Context $ctx -Tools $tools -Version $sentryVersion
         }.GetNewClosure()
     }
 

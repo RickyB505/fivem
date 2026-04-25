@@ -1315,9 +1315,9 @@ static InitFunction initFunction([]()
 	static bool timeWindowEnabled;
 	static bool drilldownWindowEnabled;
 
-	static ConVar<bool> netViewerVar("netobjviewer", ConVar_Archive, false, &netViewerEnabled);
-	static ConVar<bool> syncLogVar("netobjviewer_syncLog", ConVar_Archive, false, &g_captureSyncLog);
-	static ConVar<bool> timeVar("net_showTime", ConVar_Archive, false, &timeWindowEnabled);
+	static ConVar<bool> netViewerVar("netobjviewer", ConVar_Archive | ConVar_UserPref, false, &netViewerEnabled);
+	static ConVar<bool> syncLogVar("netobjviewer_syncLog", ConVar_Archive | ConVar_UserPref, false, &g_captureSyncLog);
+	static ConVar<bool> timeVar("net_showTime", ConVar_Archive | ConVar_UserPref, false, &timeWindowEnabled);
 	static ConVar<bool> cloneDrilldownVar("net_showDrilldown", ConVar_Archive | ConVar_UserPref, false, &drilldownWindowEnabled);
 
 	ConHost::OnShouldDrawGui.Connect([](bool* should)
@@ -1335,7 +1335,7 @@ static InitFunction initFunction([]()
 			ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, window_pos_pivot);
 
 			ImGui::SetNextWindowBgAlpha(0.3f); // Transparent background
-			if (ImGui::Begin("Net Warning", NULL, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav))
+			if (ImGui::Begin("Net Warning", NULL, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs))
 			{
 				ImGui::Text("/!\\ Performance warning");
 				ImGui::Separator();

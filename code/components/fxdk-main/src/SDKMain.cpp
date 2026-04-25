@@ -27,7 +27,7 @@
 #include <RelativeDevice.h>
 
 #include <ReverseGameData.h>
-#include <LegitimacyAPI.h>
+#include <SharedLegitimacyAPI.h>
 
 #include <SDK.h>
 #include <SDKGameProcessManager.h>
@@ -158,9 +158,9 @@ void SdkMain()
 
 	rgd->inputMutexPID = GetCurrentProcessId();
 
-	ConVar<std::string> sdkUrlVar("sdk_url", ConVar_None, "http://localhost:35419/");
-	ConVar<std::string> sdkRootPath("sdk_root_path", ConVar_None, "built-in");
-	ConVar<std::string> citizenPath("citizen_path", ConVar_None, ToNarrow(MakeRelativeCitPath(L"citizen/")));
+	ConVar<std::string> sdkUrlVar("sdk_url", ConVar_UserPref, "http://localhost:35419/");
+	ConVar<std::string> sdkRootPath("sdk_root_path", ConVar_UserPref, "built-in");
+	ConVar<std::string> citizenPath("citizen_path", ConVar_UserPref, ToNarrow(MakeRelativeCitPath(L"citizen/")));
 
 	SetEnvironmentVariable(L"CitizenFX_SDK_rootPath", ToWide(sdkRootPath.GetValue()).c_str());
 	SetEnvironmentVariable(L"CitizenFX_ToolMode", nullptr);
@@ -384,7 +384,7 @@ void SdkMain()
 		}
 		else if (eventName == "sdk:getUserId")
 		{
-			resman->GetComponent<ResourceEventManagerComponent>()->QueueEvent2("sdk:setUserId", {}, ros::GetEntitlementSource());
+			resman->GetComponent<ResourceEventManagerComponent>()->QueueEvent2("sdk:setUserId", {}, "");
 		}
 		else if (eventName == "sdk:getBuildNumber")
 		{

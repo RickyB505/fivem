@@ -58,7 +58,7 @@ inline bool Is2060()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 2060) || fx::GetEnforcedGameBuildNumber() >= 2060;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 2060) || fx::GetEnforcedGameBuildNumber() >= 2060;
 	})();
 
 	return value;
@@ -68,7 +68,7 @@ inline bool Is2189()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 2189) || fx::GetEnforcedGameBuildNumber() >= 2189;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 2189) || fx::GetEnforcedGameBuildNumber() >= 2189;
 	})();
 
 	return value;
@@ -78,7 +78,7 @@ inline bool Is2372()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 2372) || fx::GetEnforcedGameBuildNumber() >= 2372;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 2372) || fx::GetEnforcedGameBuildNumber() >= 2372;
 	})();
 
 	return value;
@@ -88,7 +88,7 @@ inline bool Is2545()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 2545) || fx::GetEnforcedGameBuildNumber() >= 2545;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 2545) || fx::GetEnforcedGameBuildNumber() >= 2545;
 	})();
 
 	return value;
@@ -98,7 +98,7 @@ inline bool Is2612()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 2612) || fx::GetEnforcedGameBuildNumber() >= 2612;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 2612) || fx::GetEnforcedGameBuildNumber() >= 2612;
 	})();
 
 	return value;
@@ -108,7 +108,7 @@ inline bool Is2699()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 2699) || fx::GetEnforcedGameBuildNumber() >= 2699;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 2699) || fx::GetEnforcedGameBuildNumber() >= 2699;
 	})();
 
 	return value;
@@ -118,7 +118,7 @@ inline bool Is2802()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 2802) || fx::GetEnforcedGameBuildNumber() >= 2802;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 2802) || fx::GetEnforcedGameBuildNumber() >= 2802;
 	})();
 
 	return value;
@@ -128,7 +128,7 @@ inline bool Is2944()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 2944) || fx::GetEnforcedGameBuildNumber() >= 2944;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 2944) || fx::GetEnforcedGameBuildNumber() >= 2944;
 	})();
 
 	return value;
@@ -138,7 +138,7 @@ inline bool Is3095()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 3095) || fx::GetEnforcedGameBuildNumber() >= 3095;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 3095) || fx::GetEnforcedGameBuildNumber() >= 3095;
 	})();
 
 	return value;
@@ -148,7 +148,7 @@ inline bool Is3258()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 3258) || fx::GetEnforcedGameBuildNumber() >= 3258;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 3258) || fx::GetEnforcedGameBuildNumber() >= 3258;
 	})();
 
 	return value;
@@ -158,42 +158,52 @@ inline bool Is3323()
 {
 	static bool value = ([]()
 	{
-		return (!fx::GetReplaceExecutable() && xbr::GetLatestStableGameBuild() >= 3323) || fx::GetEnforcedGameBuildNumber() >= 3323;
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 3323) || fx::GetEnforcedGameBuildNumber() >= 3323;
+	})();
+
+	return value;
+}
+
+inline bool Is3407()
+{
+	static bool value = ([]()
+	{
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 3407) || fx::GetEnforcedGameBuildNumber() >= 3407;
+	})();
+
+	return value;
+}
+
+inline bool IsSummerUpdate25()
+{
+	static bool value = ([]()
+	{
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= xbr::Build::Summer_2025) || fx::GetEnforcedGameBuildNumber() >= xbr::Build::Summer_2025;
+	})();
+
+	return value;
+}
+
+inline bool IsWinterUpdate25()
+{
+	static bool value = ([]()
+	{
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= 3717) || fx::GetEnforcedGameBuildNumber() >= 3717;
+	})();
+
+	return value;
+}
+
+inline bool IsPatch2026_1()
+{
+	static bool value = ([]()
+	{
+		return (!fx::GetReplaceExecutable() && xbr::GetDefaultGTA5Build() >= xbr::Build::Patch_2026_1) || fx::GetEnforcedGameBuildNumber() >= xbr::Build::Patch_2026_1;
 	})();
 
 	return value;
 }
 #elif defined(STATE_RDR3)
-inline bool Is1311()
-{
-	static bool value = ([]()
-	{
-		return fx::GetEnforcedGameBuildNumber() >= 1311;
-	})();
-
-	return value;
-}
-
-inline bool Is1355()
-{
-	static bool value = ([]()
-	{
-		return fx::GetEnforcedGameBuildNumber() >= 1355;
-	})();
-
-	return value;
-}
-
-inline bool Is1436()
-{
-	static bool value = ([]()
-	{
-		return fx::GetEnforcedGameBuildNumber() >= 1436;
-	})();
-
-	return value;
-}
-
 inline bool Is1491()
 {
 	static bool value = ([]()
@@ -474,6 +484,7 @@ struct CVehicleHealthNodeData
 	int tyreStatus[1 << 4];
 	int bodyHealth;
 	int health;
+	int totalRepairs;
 };
 
 struct CVehicleGameStateNodeData
@@ -490,7 +501,7 @@ struct CVehicleGameStateNodeData
 	bool sirenOn;
 	int lockStatus;
 	int doorsOpen;
-	int doorPositions[1 << 7];
+	int doorPositions[7];
 	bool isStationary;
 	bool lightsOn;
 	bool highbeamsOn;
@@ -509,6 +520,7 @@ struct CVehicleGameStateNodeData
 struct CEntityOrientationNodeData
 {
 	compressed_quaternion<11> quat;
+	float rotX, rotY, rotZ;
 };
 
 struct CDummyObjectCreationNodeData
@@ -612,35 +624,30 @@ struct CTrainGameStateDataNodeData
 	int engineCarriage;
 	int linkedToBackwardId;
 	int linkedToForwardId;
-
 	float distanceFromEngine;
 
 	int trainConfigIndex;
 	int carriageIndex;
-
 	int trackId;
+
+	float carriageSpeed; // 3699
 	float cruiseSpeed;
 
 	int trainState;
 
 	bool isEngine;
+	bool allowRemovalByPopulation; // 2372
 	bool isCaboose;
-
-	bool unk12;
-
+	bool isMissionTrain;
 	bool direction;
-
-	bool unk14;
-
+	bool hasPassengerCarriages;
 	bool renderDerailed;
 
-	// 2372 {
-	bool unk198;
-	bool unk224;
-	bool unk199;
-	// }
-
 	bool forceDoorsOpen;
+	bool stopAtStations; // 2372
+	bool isTrackDirectionForwards; // 3699
+
+	bool highPrecisionBlending; // 2372
 };
 
 struct CPlayerGameStateNodeData
@@ -746,6 +753,25 @@ struct CPedMovementGroupNodeData
 	bool isRagdolling;
 };
 
+struct CPedAINodeData
+{
+	int relationShip;
+	int decisionMaker;
+};
+
+struct CPedVehicleNodeData
+{
+	bool inVehicle;
+	int curVehicle;
+	int lastVehiclePedWasIn;
+
+	bool onHorse;
+	int curHorse;
+	int lastHorsePedWasOn;
+
+	int curSeat;
+};
+
 enum ePopType
 {
 	POPTYPE_UNKNOWN = 0,
@@ -840,6 +866,8 @@ public:
 
 	virtual CPedMovementGroupNodeData* GetPedMovementGroup() = 0;
 
+	virtual CPedAINodeData* GetPedAI() = 0;
+
 	virtual void CalculatePosition() = 0;
 
 	virtual bool GetPopulationType(ePopType* popType) = 0;
@@ -849,6 +877,8 @@ public:
 	virtual bool GetScriptHash(uint32_t* scriptHash) = 0;
 
 	virtual bool IsEntityVisible(bool* visible) = 0;
+
+	virtual CPedVehicleNodeData* GetPedVehicleData() = 0;
 };
 
 enum EntityOrphanMode : uint8_t
@@ -857,7 +887,6 @@ enum EntityOrphanMode : uint8_t
 	DeleteOnOwnerDisconnect = 1,
 	KeepEntity = 2,
 };
-
 struct SyncEntityState
 {
 	using TData = std::variant<int, float, bool, std::string>;
@@ -903,6 +932,9 @@ struct SyncEntityState
 	bool wantsReassign = false;
 	bool firstOwnerDropped = false;
 	EntityOrphanMode orphanMode = EntityOrphanMode::DeleteWhenNotRelevant;
+#ifdef STATE_FIVE
+	bool allowRemoteSyncedScenes = false;
+#endif
 
 	std::list<std::function<void(const fx::ClientSharedPtr& ptr)>> onCreationRPC;
 
@@ -961,6 +993,14 @@ public:
 			syncTree->GetScriptHash(&scriptHash);
 		}
 		return scriptHash;
+	}
+
+	/// <summary>
+	/// Checks of the entity is set to be kept by the server via orphan mode or by being owned by a server script.
+	/// </summary>
+	inline bool ShouldServerKeepEntity()
+	{
+		return IsOwnedByServerScript() || orphanMode == EntityOrphanMode::KeepEntity;
 	}
 
 	inline bool IsOwnedByScript()
@@ -1258,6 +1298,7 @@ struct SyncedEntityData
 	sync::SyncEntityPtr entity;
 	bool forceUpdate;
 	bool hasCreated;
+	bool hasRoutedStateBag = false;
 	bool hasNAckedCreate = false;
 };
 
@@ -1349,6 +1390,10 @@ public:
 	
 	void GetFreeObjectIds(const fx::ClientSharedPtr& client, uint8_t numIds, std::vector<uint16_t>& freeIds);
 
+#ifdef STATE_FIVE
+	void IterateTrainLink(const sync::SyncEntityPtr& train, std::function<bool(sync::SyncEntityPtr&)> fn, bool callOnInitialEntity = true);
+#endif
+
 	void ReassignEntity(uint32_t entityHandle, const fx::ClientSharedPtr& targetClient, std::unique_lock<std::shared_mutex>&& lock = {});
 
 	bool SetEntityStateBag(uint8_t playerId, uint16_t objectId, std::function<std::shared_ptr<StateBag>()> createStateBag) override;
@@ -1363,7 +1408,51 @@ private:
 	void ReassignEntityInner(uint32_t entityHandle, const fx::ClientSharedPtr& targetClient, std::unique_lock<std::shared_mutex>&& lock = {});
 
 public:
-	void DeleteEntity(const fx::sync::SyncEntityPtr& entity);
+
+	template<bool IgnoreTrainChecks = false>
+	void DeleteEntity(const fx::sync::SyncEntityPtr& entity)
+	{
+		if (entity->type == sync::NetObjEntityType::Player || !entity->syncTree)
+		{
+			return;
+		}
+
+		// can only be used on FiveM, RDR doesn't have its sync nodes filled out
+#ifdef STATE_FIVE
+		// this will be ignored by DELETE_TRAIN so calling on any part of the train will delete the entire thing
+		if constexpr (!IgnoreTrainChecks)
+		{
+
+			if (entity->type == sync::NetObjEntityType::Train;
+				auto trainState = entity->syncTree->GetTrainState())
+			{
+				// don't allow the deletion of carriages until we can modify sync node data and overwrite the linked forward/linked backwards state
+				if (trainState->engineCarriage && trainState->engineCarriage != entity->handle)
+				{
+					return;
+				}
+			}
+		}
+#endif
+
+		gscomms_execute_callback_on_sync_thread([=]()
+		{
+#ifdef STATE_FIVE
+			if (entity->type == sync::NetObjEntityType::Train)
+			{
+				// recursively delete every part of the train
+				IterateTrainLink(entity, [=](fx::sync::SyncEntityPtr& train)
+				{
+					RemoveClone({}, train->handle);
+
+					return true;
+				});
+				return;
+			}
+#endif
+			RemoveClone({}, entity->handle);
+		});
+	}
 
 	void ClearClientFromWorldGrid(const fx::ClientSharedPtr& targetClient);
 
@@ -1377,6 +1466,11 @@ public:
 	inline void SetEntityLockdownMode(EntityLockdownMode mode)
 	{
 		m_entityLockdownMode = mode;
+	}
+
+	bool GetStateBagStrictMode() const override
+	{
+		return m_stateBagStrictMode;
 	}
 
 	EntityLockdownMode GetEntityLockdownMode(const fx::ClientSharedPtr& client);
@@ -1424,6 +1518,9 @@ private:
 	bool ValidateEntity(EntityLockdownMode entityLockdownMode, const fx::sync::SyncEntityPtr& entity);
 
 public:
+	std::unordered_set<uint32_t> blockedEvents;
+	std::shared_mutex blockedEventsMutex;
+	bool IsNetGameEventBlocked(uint32_t eventNameHash);
 	std::function<bool()> GetGameEventHandler(const fx::ClientSharedPtr& client, const std::vector<uint16_t>& targetPlayers, net::Buffer&& buffer);
 
 private:
@@ -1557,6 +1654,7 @@ private:
 	std::shared_ptr<fx::StateBag> m_globalBag;
 
 	std::shared_ptr<ConVar<EntityLockdownMode>> m_lockdownModeVar;
+	std::shared_ptr<ConVar<bool>> m_stateBagStrictModeVar;
 
 	//private:
 public:
@@ -1568,6 +1666,8 @@ public:
 
 	EntityLockdownMode m_entityLockdownMode;
 	SyncStyle m_syncStyle = SyncStyle::NAK;
+
+	bool m_stateBagStrictMode {false};
 };
 
 // for use in sync trees

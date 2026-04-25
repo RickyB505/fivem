@@ -396,7 +396,7 @@ void CloneManagerLocal::BindNetLibrary(NetLibrary* netLibrary)
 	})
 	.detach();
 
-	static ConVar<std::string> logFile("onesync_logFile", ConVar_None, "", &m_logFile);
+	static ConVar<std::string> logFile("onesync_logFile", ConVar_UserPref, "", &m_logFile);
 
 	static ConsoleCommand printObj("net_printOwner", [this](int objectId)
 	{
@@ -920,7 +920,8 @@ void msgPackedClones::Read(net::Buffer& buffer)
 void TempHackMakePhysicalPlayer(uint16_t clientId, int slotId = -1);
 
 extern std::map<int, int> g_creationTokenToObjectId;
-extern std::map<int, uint32_t> g_objectIdToCreationToken;
+extern std::map<int, uint32_t> g_objectIdToCreationTokenRPC;
+std::unordered_map<int, uint32_t> g_objectIdToCreationToken;
 
 rage::netObject* CloneManagerLocal::GetNetObject(uint16_t objectId)
 {
@@ -1133,6 +1134,7 @@ bool CloneManagerLocal::HandleCloneCreate(const msgClone& msg)
 	if (msg.m_creationToken != 0)
 	{
 		g_creationTokenToObjectId[msg.m_creationToken] = msg.GetObjectId();
+		g_objectIdToCreationToken[msg.GetObjectId()] = msg.m_creationToken;
 	}
 
 	ackPacket();
@@ -1769,6 +1771,13 @@ static HookFunction hookFunctionSceneUpdateWorkaround([]()
 	MH_CreateHook(hook::get_pattern("F7 D3 21 58 10 0F", -0x3F), fwSceneUpdate__RemoveFromSceneUpdate_Track, (void**)&fwSceneUpdate__RemoveFromSceneUpdate);
 	MH_EnableHook(MH_ALL_HOOKS);
 });
+
+static HookFunction hookFunctionModifySyncTrees([]()
+{
+	// Change to "mov r8d, ebx; nop;" (44 8B C3 90). ebx value is 87
+	// Change inventory node flags from MIGRATE_NODE to UPDATE_CREATE_NODE.
+	hook::put<uint32_t>(xbr::IsGameBuildOrGreater<3407>() ? hook::get_pattern("45 8D 47 ? 49 8D 96 ? ? ? ? 45 33 C9") : hook::get_pattern("44 8D 46 ? 45 33 C9 49 8B D4"), 0x90C38B44);
+});
 #endif
 
 void CloneManagerLocal::Update()
@@ -1927,7 +1936,7 @@ void CloneManagerLocal::DestroyNetworkObject(rage::netObject* object)
 	if (g_curNetObjectSelection == object)
 	{
 		g_curNetObjectSelection = nullptr;
-	}
+ 	}
 
 	for (auto& objectList : m_netObjects)
 	{
@@ -1948,6 +1957,8 @@ void CloneManagerLocal::DestroyNetworkObject(rage::netObject* object)
 	m_savedEntitySet.erase(object);
 	m_trackedObjects.erase(object->GetObjectId());
 	m_extendedData.erase(object->GetObjectId());
+
+	g_objectIdToCreationToken.erase(object->GetObjectId());
 
 	m_savedEntityVec.erase(std::remove(m_savedEntityVec.begin(), m_savedEntityVec.end(), object), m_savedEntityVec.end());
 }
@@ -2098,7 +2109,7 @@ void CloneManagerLocal::WriteUpdates()
 		auto& objectData = m_trackedObjects[objectId];
 
 #ifdef IS_RDR3
-		if (objectData.lastSyncTime == 0ms && object->GetObjectType() == (int)NetObjEntityType::DraftVeh)
+		if (objectData.lastSyncTime == 0ms && (object->GetObjectType() == (int)NetObjEntityType::DraftVeh || object->GetObjectType() == (int)NetObjEntityType::PropSet))
 		{
 			uint32_t reason = 0;
 
@@ -2328,7 +2339,7 @@ void CloneManagerLocal::WriteUpdates()
 
 					if (syncType == 1)
 					{
-						netBuffer.Write(32, g_objectIdToCreationToken[objectId]);
+						netBuffer.Write(32, g_objectIdToCreationTokenRPC[objectId]);
 						netBuffer.Write(kNetObjectTypeBitLength, objectType);
 					}
 

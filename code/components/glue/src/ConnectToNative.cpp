@@ -48,14 +48,18 @@
 
 #include <CrossBuildRuntime.h>
 
-#include <SteamComponentAPI.h>
-
 #include <MinMode.h>
 
+#include "CfxState.h"
 #include "GameInit.h"
 #include "CnlEndpoint.h"
+#include <SharedLegitimacyAPI.h>
+#include "Error.h"
+
 #include "PacketHandler.h"
 #include "PaymentRequest.h"
+
+#include "LinkProtocolIPC.h"
 
 #ifdef GTA_FIVE
 #include <ArchetypesCollector.h>
@@ -123,27 +127,17 @@ void RestartGameToOtherBuild(int build, int pureLevel, std::wstring poolSizesInc
 
 	auto cli = fmt::sprintf(L"\"%s\" %s %s %s -switchcl:%d \"%s://connect/%s\"",
 	hostData->gameExePath,
-	build == 1604 ? L"" : fmt::sprintf(L"-b%d", build),
+	fmt::sprintf(L"-b%d", build),
 	IsCL2() ? L"-cl2" : L"",
 	pureLevel == 0 ? L"" : fmt::sprintf(L"-pure_%d", pureLevel),
 	(uintptr_t)switchEvent,
 	hostData->GetLinkProtocol(),
 	ToWide(g_lastConn));
 
-	uint32_t defaultBuild =
-#ifdef GTA_FIVE
-	1604
-#elif defined(IS_RDR3)
-	1311
-#else
-	0
-#endif
-	;
-
 	// we won't launch the default build if we don't do this
-	if (build == defaultBuild)
+	if (build == xbr::GetDefaultGameBuild())
 	{
-		SaveBuildNumber(defaultBuild);
+		SaveBuildNumber(xbr::GetDefaultGameBuild());
 	}
 
 	SaveGameSettings(poolSizesIncreaseSetting, replaceExecutable);
@@ -223,24 +217,6 @@ void loadSettings() {
 		
 		CoTaskMemFree(appDataPath);
 	}
-}
-
-inline ISteamComponent* GetSteam()
-{
-	auto steamComponent = Instance<ISteamComponent>::Get();
-
-	// if Steam isn't running, return an error
-	if (!steamComponent->IsSteamRunning())
-	{
-		steamComponent->Initialize();
-
-		if (!steamComponent->IsSteamRunning())
-		{
-			return nullptr;
-		}
-	}
-
-	return steamComponent;
 }
 
 NetLibrary* netLibrary;
@@ -335,8 +311,6 @@ static void HandleAuthPayload(const std::string& payloadStr)
 	}
 }
 
-#include <LegitimacyAPI.h>
-
 static std::string g_discourseClientId;
 static std::string g_discourseUserToken;
 
@@ -387,6 +361,7 @@ static WRL::ComPtr<IShellLink> MakeShellLink(const ServerLink& link)
 
 		auto hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, hostData->GetInitialPid());
 		GetModuleFileNameEx(hProcess, NULL, imageFileName, std::size(imageFileName));
+		CloseHandle(hProcess);
 
 		psl->SetPath(imageFileName);
 		psl->SetArguments(fmt::sprintf(L"%s%s://connect/%s", buildArgument, hostData->GetLinkProtocol(), ToWide(link.url)).c_str());
@@ -603,6 +578,18 @@ static InitFunction initFunction([] ()
 
 	OnGameFrame.Connect([]()
 	{
+		static bool wasSteamInitialized = cfx::legitimacy::IsSteamInitializedWrapper();
+
+		if (wasSteamInitialized && !cfx::legitimacy::IsSteamRunning())
+		{
+			FatalError("Steam process has exited. The game will now close.");
+		}
+
+		if (!wasSteamInitialized && cfx::legitimacy::IsSteamInitializedWrapper())
+		{
+			wasSteamInitialized = true;
+		}
+
 		if (disconnect)
 		{
 			DisconnectCmd();
@@ -698,26 +685,11 @@ static InitFunction initFunction([] ()
 
 			if ((strstr(error.c_str(), "steam") || strstr(error.c_str(), "Steam")) && !strstr(error.c_str(), ".ms/verify"))
 			{
-				if (auto steam = GetSteam())
+				auto steamID = cfx::legitimacy::GetSteamIdAsIntWrapper();
+
+				if ((steamID & 0xFFFFFFFF00000000) != 0)
 				{
-					if (steam->IsSteamRunning())
-					{
-						if (IClientEngine* steamClient = steam->GetPrivateClient())
-						{
-							InterfaceMapper steamUser(steamClient->GetIClientUser(steam->GetHSteamUser(), steam->GetHSteamPipe(), "CLIENTUSER_INTERFACE_VERSION001"));
-
-							if (steamUser.IsValid())
-							{
-								uint64_t steamID = 0;
-								steamUser.Invoke<void>("GetSteamID", &steamID);
-
-								if ((steamID & 0xFFFFFFFF00000000) != 0)
-								{
-									error += "\nThis is a Steam authentication failure, but you are running Steam and it is signed in. The server owner can find more information in their server console.";
-								}
-							}
-						}
-					}
+					error += "\nThis is a Steam authentication failure, but you are running Steam and it is signed in. The server owner can find more information in their server console.";
 				}
 			}
 
@@ -1009,7 +981,7 @@ static InitFunction initFunction([] ()
 
 	curChannel = ToNarrow(resultPath);
 
-	static ConVar<bool> uiPremium("ui_premium", ConVar_None, false);
+	static ConVar<bool> uiPremium("ui_premium", ConVar_Internal | ConVar_ScriptRestricted, false);
 
 	// ConVar_ScriptRestricted because update channel is often misused as a marker for other things
 	static ConVar<std::string> uiUpdateChannel("ui_updateChannel", ConVar_ScriptRestricted, curChannel,
@@ -1237,14 +1209,7 @@ static InitFunction initFunction([] ()
 				Instance<ICoreGameInit>::Get()->SetData("discourseUserToken", g_discourseUserToken);
 				Instance<ICoreGameInit>::Get()->SetData("discourseClientId", g_discourseClientId);
 
-				Instance<::HttpClient>::Get()->DoPostRequest(
-					CNL_ENDPOINT "api/validate/discourse",
-					{
-						{ "entitlementId", ros::GetEntitlementSource() },
-						{ "authToken", g_discourseUserToken },
-						{ "clientId", g_discourseClientId },
-					},
-					[](bool success, const char* data, size_t size)
+				cfx::legitimacy::AuthenticateDiscourse(g_discourseClientId.c_str(), g_discourseUserToken.c_str(), [](bool success, const char* data, size_t size)
 				{
 					if (success)
 					{
@@ -1260,7 +1225,10 @@ static InitFunction initFunction([] ()
 							{
 								auto name = group.value<std::string>("name", "");
 
-								if (name == "staff" || name == "patreon_enduser")
+								static constexpr const char* portal_prefix = "ec_";
+								static constexpr size_t portal_prefix_len = 3;
+
+								if (name == "staff" || name == "patreon_enduser" || (name.size() >= portal_prefix_len && std::memcmp(name.data(), portal_prefix, portal_prefix_len) == 0))
 								{
 									hasEndUserPremium = true;
 									break;
@@ -1269,7 +1237,6 @@ static InitFunction initFunction([] ()
 						}
 						catch (const std::exception& e)
 						{
-
 						}
 
 						if (hasEndUserPremium)
@@ -1379,10 +1346,6 @@ static InitFunction initFunction([] ()
 #include <gameSkeleton.h>
 #endif
 #include <shellapi.h>
-
-#include <nng/nng.h>
-#include <nng/protocol/pipeline0/pull.h>
-#include <nng/protocol/pipeline0/push.h>
 
 static void ProtocolRegister(const wchar_t* name, const wchar_t* cls)
 {
@@ -1529,15 +1492,10 @@ void Component_RunPreInit()
 		}
 		else
 		{
-			nng_socket socket;
-			nng_dialer dialer;
-
 			auto j = nlohmann::json::object({ { "host", connectHost }, { "params", connectParams } });
 			std::string connectMsg = j.dump(-1, ' ', false, nlohmann::detail::error_handler_t::strict);
 
-			nng_push0_open(&socket);
-			nng_dial(socket, CONNECT_NNG_SOCKET_NAME, &dialer, 0);
-			nng_send(socket, const_cast<char*>(connectMsg.c_str()), connectMsg.size(), 0);
+			cfx::glue::LinkProtocolIPC::SendConnectTo(connectMsg);
 
 			if (!hostData->gamePid)
 			{
@@ -1570,12 +1528,7 @@ void Component_RunPreInit()
 		}
 		else
 		{
-			nng_socket socket;
-			nng_dialer dialer;
-
-			nng_push0_open(&socket);
-			nng_dial(socket, AUTH_NNG_SOCKET_NAME, &dialer, 0);
-			nng_send(socket, const_cast<char*>(authPayload.c_str()), authPayload.size(), 0);
+			cfx::glue::LinkProtocolIPC::SendAuthPayload(authPayload);
 
 			if (!hostData->gamePid)
 			{
@@ -1591,9 +1544,8 @@ void Component_RunPreInit()
 	}
 }
 
-static InitFunction connectInitFunction([]()
-{
 #if __has_include(<gameSkeleton.h>)
+static InitFunction buildSaverInitFunction([]() {
 	rage::OnInitFunctionStart.Connect([](rage::InitFunctionType type)
 	{
 		if (type == rage::INIT_BEFORE_MAP_LOADED)
@@ -1601,19 +1553,33 @@ static InitFunction connectInitFunction([]()
 			SaveBuildNumber(xbr::GetRequestedGameBuild());
 		}
 	});
+});
 #endif
 
-	static nng_socket netSocket;
-	static nng_listener listener;
+static InitFunction linkProtocolIPCInitFunction([]()
+{
+	// Only run LinkProtocolIPC in the game process
+	if (!CfxState::Get()->IsGameProcess())
+	{
+		return;
+	}
 
-	nng_pull0_open(&netSocket);
-	nng_listen(netSocket, CONNECT_NNG_SOCKET_NAME, &listener, 0);
+	cfx::glue::LinkProtocolIPC::Initialize();
 
-	static nng_socket netAuthSocket;
-	static nng_listener authListener;
+	cfx::glue::LinkProtocolIPC::OnConnectTo.Connect([](const std::string_view& connectMsg)
+	{
+		auto connectData = nlohmann::json::parse(connectMsg);
+		ConnectTo(connectData["host"], false, connectData["params"]);
 
-	nng_pull0_open(&netAuthSocket);
-	nng_listen(netAuthSocket, AUTH_NNG_SOCKET_NAME, &authListener, 0);
+		SetForegroundWindow(CoreGetGameWindow());
+	});
+
+	cfx::glue::LinkProtocolIPC::OnAuthPayload.Connect([](const std::string_view& authPayload)
+	{
+		HandleAuthPayload(std::string(authPayload));
+
+		SetForegroundWindow(CoreGetGameWindow());
+	});
 
 	GetEarlyGameFrame().Connect([]()
 	{
@@ -1622,34 +1588,6 @@ static InitFunction connectInitFunction([]()
 			return;
 		}
 
-		char* buffer;
-		size_t bufLen;
-
-		int err;
-
-		err = nng_recv(netSocket, &buffer, &bufLen, NNG_FLAG_NONBLOCK | NNG_FLAG_ALLOC);
-
-		if (err == 0)
-		{
-			std::string connectMsg(buffer, buffer + bufLen);
-			nng_free(buffer, bufLen);
-
-			auto connectData = nlohmann::json::parse(connectMsg);
-			ConnectTo(connectData["host"], false, connectData["params"]);
-
-			SetForegroundWindow(CoreGetGameWindow());
-		}
-
-		err = nng_recv(netAuthSocket, &buffer, &bufLen, NNG_FLAG_NONBLOCK | NNG_FLAG_ALLOC);
-
-		if (err == 0)
-		{
-			std::string msg(buffer, buffer + bufLen);
-			nng_free(buffer, bufLen);
-
-			HandleAuthPayload(msg);
-
-			SetForegroundWindow(CoreGetGameWindow());
-		}
+		cfx::glue::LinkProtocolIPC::ProcessMessages();
 	});
 });

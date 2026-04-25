@@ -50,7 +50,6 @@ std::map<std::string, std::string> g_redirectionData;
 
 void DoPreLaunchTasks();
 void NVSP_DisableOnStartup();
-void SteamInput_Initialize();
 void XBR_EarlySelect();
 bool ExecutablePreload_Init();
 void InitLogging();
@@ -115,7 +114,7 @@ void DLLError(DWORD errorCode, std::string_view dllName)
 	// force verifying game files
 	_wunlink(MakeRelativeCitPath(L"content_index.xml").c_str());
 
-	FatalError("Could not load %s\nThis is usually a sign of an incomplete game installation. Please restart %s and try again.\n\nError 0x%08x - %s",
+	FatalErrorNoReport("Could not load %s\nThis is usually a sign of an incomplete game installation. Please restart %s and try again.\n\nError 0x%08x - %s",
 		dllName,
 		ToNarrow(PRODUCT_NAME),
 		HRESULT_FROM_WIN32(errorCode),
@@ -266,10 +265,13 @@ int RealMain()
 
 	// initialize our initState instance
 	// this needs to be before *any* MakeRelativeCitPath use in main process
-	HostSharedData<CfxState> initState("CfxInitState");
+	auto initState = CfxState::Get();
 
 	// set link protocol, e.g. fivem or redm
 	initState->SetLinkProtocol(LINK_PROTOCOL);
+
+	// set product ID
+	initState->SetProductID(PRODUCT_ID);
 
 	// path environment appending of our primary directories
 	static wchar_t pathBuf[32768];
@@ -419,6 +421,7 @@ int RealMain()
 #endif
 
 	// crossbuildruntime is safe from this point on
+	initState->SetGameBuild(xbr::GetGameBuild());
 
 	// try loading TLS DLL a second time, and ensure it *is* loaded
 #if !defined(GTA_NY) && defined(LAUNCHER_PERSONALITY_GAME)
@@ -600,6 +603,11 @@ int RealMain()
 	// if not, system d3d10.dll etc. may load a d3d11.dll from search path anyway and this may be a 'weird' one
 	loadSystemDll(L"\\d3d11.dll");
 
+#ifdef IS_RDR3
+	// RedM attempts to load vulkan bundled with CEF first which on some systems leads to various issues
+	loadSystemDll(L"\\vulkan-1.dll");
+#endif
+
 	loadSystemDll(L"\\d3d9.dll");
 	loadSystemDll(L"\\d3d10.dll");
 	loadSystemDll(L"\\d3d10_1.dll");
@@ -608,7 +616,6 @@ int RealMain()
 #ifndef LAUNCHER_PERSONALITY_CHROME
 	LoadLibrary(MakeRelativeCitPath(L"botan.dll").c_str());
 	LoadLibrary(MakeRelativeCitPath(L"dinput8.dll").c_str());
-	LoadLibrary(MakeRelativeCitPath(L"steam_api64.dll").c_str());
 
 	// laod V8 DLLs in case end users have these in a 'weird' directory
 	LoadLibrary(MakeRelativeCitPath(L"bin/icuuc.dll").c_str());
@@ -617,6 +624,8 @@ int RealMain()
 	LoadLibrary(MakeRelativeCitPath(L"v8_libbase.dll").c_str());
 	LoadLibrary(MakeRelativeCitPath(L"v8.dll").c_str());
 #endif
+
+	LoadLibrary(MakeRelativeCitPath(L"steam_api64.dll").c_str());
 
 	if (addDllDirectory)
 	{
@@ -749,7 +758,6 @@ int RealMain()
 	{
 #ifdef LAUNCHER_PERSONALITY_MAIN
 		NVSP_DisableOnStartup();
-		SteamInput_Initialize();
 #endif
 
 		GetModuleFileNameW(NULL, initState->gameExePath, std::size(initState->gameExePath));

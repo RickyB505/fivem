@@ -5,6 +5,7 @@
 #include "CrossBuildRuntime.h"
 #include "Hooking.h"
 #include "Hooking.Invoke.h"
+#include "Hooking.FlexStruct.h"
 #include "ICoreGameInit.h"
 #include "MinHook.h"
 
@@ -21,7 +22,7 @@ static CNetGamePlayer*(*g_origAllocateNetPlayer)(void*);
 static hook::cdecl_stub<CNetGamePlayer*(void*)> g_netPlayerCtor([]()
 {
 #ifdef GTA_FIVE
-	return (xbr::IsGameBuildOrGreater<2944>()) ? hook::get_pattern("83 8B ? 00 00 00 FF 48 8D 05 ? ? ? ? 33 F6", -0x17) : hook::get_pattern("83 8B ? 00 00 00 FF 33 F6", -0x17);
+	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 48 81 C7 ? ? ? ? FF CD 79 ? 33 ED"));
 #else // IS_RDR3
 	return hook::get_pattern("E8 ? ? ? ? 33 F6 48 8D 05 ? ? ? ? 48 8D 8B", -0x17);
 #endif
@@ -33,6 +34,15 @@ static hook::thiscall_stub<void(rage::netPlayerMgrBase*, CNetGamePlayer*)> g_net
 	return hook::get_call(hook::get_pattern("FF 57 30 48 8B D6 49 8B CE E8", 9));
 #else // IS_RDR3
 	return hook::get_call(hook::get_pattern("48 8B 01 FF 50 ? 49 8B D7 48 8B CE E8", 12));
+#endif
+});
+
+static hook::thiscall_stub<CNetGamePlayer*(rage::netPlayerMgrBase*)> g_netPlayerMgrBase_GetMyPlayer([]
+{
+#ifdef GTA_FIVE
+	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 48 89 44 24 ? 48 85 C0 0F 84 ? ? ? ? 41 8B 8F"));
+#else // IS_RDR3
+	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 4C 8B E0 48 85 C0 74 ? 48 8B C8 E8 ? ? ? ? 48 8B E8"));
 #endif
 });
 
@@ -58,12 +68,7 @@ namespace rage
 
 	CNetGamePlayer* netPlayerMgrBase::GetLocalPlayer()
 	{
-#ifdef GTA_FIVE
-		const int offset = (xbr::IsGameBuildOrGreater<2944>() ? 240 : 232);
-		return *(CNetGamePlayer**)((uint64_t)this + offset);
-#elif IS_RDR3
-		return *(CNetGamePlayer**)((uint64_t)this + 232);
-#endif
+		return g_netPlayerMgrBase_GetMyPlayer(this);
 	}
 
 	CNetGamePlayer* GetLocalPlayer()
@@ -100,7 +105,7 @@ static HookFunction hookFunction([]()
 #ifdef GTA_FIVE
 	MH_CreateHook(hook::get_pattern("48 8B F9 48 39 99 ? ? 00 00 74 ? 48 81 C1 ? ? 00 00 48", -12), rage::AllocateNetPlayer, (void**)&g_origAllocateNetPlayer);
 #elif IS_RDR3
-	MH_CreateHook((xbr::IsGameBuildOrGreater<1436>()) ? hook::get_pattern("33 DB 48 8B F9 48 39 99 ? ? ? ? 75 ? 8D 53 01", -10) : hook::get_pattern("48 39 99 ? ? ? ? 74 ? 48 81 C1 ? ? ? ? 48 8B 19 48 85", -15), rage::AllocateNetPlayer, (void**)&g_origAllocateNetPlayer);
+	MH_CreateHook(hook::get_pattern("33 DB 48 8B F9 48 39 99 ? ? ? ? 75 ? 8D 53 01", -10), rage::AllocateNetPlayer, (void**)&g_origAllocateNetPlayer);
 #endif
 
 	// CNetGamePlayer size
@@ -112,6 +117,7 @@ static HookFunction hookFunction([]()
 #endif
 	}
 
+	// Player manager
 #ifdef GTA_FIVE
 	g_playerMgr = *hook::get_address<rage::netPlayerMgrBase**>(hook::get_pattern("40 80 FF 20 72 B3 48 8B 0D", 9));
 #elif IS_RDR3

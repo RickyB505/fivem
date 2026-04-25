@@ -47,6 +47,8 @@
 #include <HostSharedData.h>
 #include <ReverseGameData.h>
 
+#include <UrlConfirmationExport.h>
+
 static void BuildFont(float scale);
 
 static ImGuiStyle InitStyle()
@@ -68,6 +70,8 @@ static ImGuiStyle InitStyle()
 	style.Colors[ImGuiCol_FrameBgHovered] = semiTransparentBgHover;
 	style.Colors[ImGuiCol_TextSelectedBg] = hiliteBlueTransparent;
 
+	style.Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0, 0, 0, 0);
+
 	return style;
 }
 
@@ -79,7 +83,7 @@ int g_bufferHeight;
 
 bool ConsoleHasAnything()
 {
-	return g_consoleFlag || g_cursorFlag;
+	return g_consoleFlag || g_cursorFlag || nui::g_showUrlConfirmModal.load();
 }
 
 bool ConsoleHasMouse()
@@ -311,6 +315,8 @@ static void RenderDrawLists(ImDrawData* drawData)
 void DrawConsole();
 void DrawDevGui();
 
+void DrawUrlConfirmationModal();
+
 static std::recursive_mutex g_conHostMutex;
 ImFont* consoleFontSmall;
 
@@ -406,7 +412,7 @@ void OnConsoleFrameDraw(int width, int height, bool usedSharedD3D11)
 
 	ConHost::OnShouldDrawGui(&shouldDrawGui);
 
-	if (!g_cursorFlag && !g_consoleFlag && !shouldDrawGui && !g_winConsole)
+	if (!g_cursorFlag && !g_consoleFlag && !shouldDrawGui && !g_winConsole && !nui::g_showUrlConfirmModal.load())
 	{
 		// if not drawing the gui, we're also not owning the cursor
 #ifdef WITH_NUI
@@ -478,25 +484,27 @@ void OnConsoleFrameDraw(int width, int height, bool usedSharedD3D11)
 		}
 	}
 
+	DrawMiniConsole();
+
+	ConHost::OnDrawGui();
+
 	if (g_consoleFlag)
 	{
 		DrawDevGui();
 		DrawConsole();
 	}
 
-	DrawMiniConsole();
-
 	if (g_winConsole)
 	{
 		DrawWinConsole(&g_winConsole);
 	}
 
-	ConHost::OnDrawGui();
-
 	if (wasSmallFont)
 	{
 		ImGui::PopFont();
 	}
+
+	DrawUrlConfirmationModal();
 
 	ImGui::Render();
 	RenderDrawLists(ImGui::GetDrawData());
@@ -659,6 +667,7 @@ static HookFunction initFunction([]()
 	io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	io.ConfigDockingWithShift = true;
 	io.ConfigWindowsResizeFromEdges = true;
+	io.ConfigWindowsMoveFromTitleBarOnly = true;
 
 	io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 	io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;

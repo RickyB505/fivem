@@ -6,11 +6,12 @@
 
 		links { 'Shared' }
 
-		add_dependencies { 'net:base', 'vendor:catch2' }
+		add_dependencies { 'net:base', 'vendor:catch2', 'vendor:lua', 'citizen:scripting:core', 'citizen:scripting:lua' }
 
 		if os.istarget('windows') then
 			links { "psapi", "wininet", "winhttp" }
 			flags { "NoManifest", "NoImportLib" }
+			add_dependencies { 'vendor:rpmalloc' }
 		else
 			links { 'dl', 'pthread' }
 		end

@@ -47,6 +47,8 @@
 
 #include <concurrent_unordered_set.h>
 
+#include "FormData.h"
+
 using Microsoft::WRL::ComPtr;
 
 static hook::cdecl_stub<rage::five::pgDictionary<rage::grcTexture>*(void*, int)> textureDictionaryCtor([]()
@@ -200,7 +202,7 @@ void RuntimeTex::SetPixel(int x, int y, int r, int g, int b, int a)
 {
 	auto offset = (y * m_pitch) + (x * 4);
 
-	if (offset < 0 || offset >= m_backingPixels.size() - 4)
+	if (offset < 0 || offset > m_backingPixels.size() - 4)
 	{
 		return;
 	}
@@ -385,7 +387,7 @@ static ComPtr<IWICBitmapSource> ImageToBitmapSource(std::string_view fileName)
 		fileNameString = fileNameString.substr(f + 7);
 
 		std::string decodedURL;
-		UrlDecode(fileNameString, decodedURL, false);
+		net::UrlDecode(fileNameString, decodedURL, false);
 
 		decodedURL.erase(std::remove_if(decodedURL.begin(), decodedURL.end(), [](char c)
 						 {
@@ -1137,15 +1139,14 @@ static InitFunction initFunction([]()
 					fwArchetypeDef* archetypeDef = (fwArchetypeDef*)MakeStructFromMsgPack("CBaseArchetypeDef", archetypeData);
 
 					// assume this is a CBaseModelInfo
-					// TODO: get [mi] from [miPtr]
-					void* miPtr = g_archetypeFactories->Get(1)->GetOrCreate(archetypeDef->name, 1);
+					g_archetypeFactories->Get(1)->AddStorageBlock(archetypeDef->name, 1);
 
-					fwArchetype* mi = g_archetypeFactories->Get(1)->Get(archetypeDef->name);
+					fwArchetype* mi = g_archetypeFactories->Get(1)->CreateBaseItem(archetypeDef->name);
 
 					mi->InitializeFromArchetypeDef(1390, archetypeDef, true);
 
 					// TODO: clean up
-					mi->flags &= ~(1 << 31);
+					mi->streaming = 0;
 
 					// register the archetype in the streaming module
 					registerArchetype(mi);

@@ -114,10 +114,6 @@ static void send_sentry_session(const json& data)
 #endif
 }
 
-std::string g_entitlementSource;
-
-bool LoadOwnershipTicket();
-
 static json g_session;
 
 static void UpdateSession(json& session)
@@ -136,69 +132,6 @@ static void UpdateSession(json& session)
 	}
 
 	g_session = session;
-}
-
-static void OnStartSession()
-{
-	auto oldSession = load_json_file(L"data\\cache\\session");
-
-	if (!oldSession.is_null())
-	{
-		oldSession["status"] = "abnormal";
-		send_sentry_session(oldSession);
-
-		_wunlink(MakeRelativeCitPath(L"data\\cache\\session").c_str());
-	}
-
-	UUID uuid;
-	UuidCreate(&uuid);
-	char* str;
-	UuidToStringA(&uuid, (RPC_CSTR*)&str);
-	
-	std::string sid = str;
-
-	RpcStringFreeA((RPC_CSTR*)&str);
-
-	LoadOwnershipTicket();
-
-	if (g_entitlementSource.empty())
-	{
-		g_entitlementSource = "default";
-	}
-
-	FILE* f = _wfopen(MakeRelativeCitPath(L"citizen/release.txt").c_str(), L"r");
-	std::string version;
-
-	if (f)
-	{
-		char ver[128];
-
-		fgets(ver, sizeof(ver), f);
-		fclose(f);
-
-		version = fmt::sprintf("cfx-%d", atoi(ver));
-	}
-	else
-	{
-		version = fmt::sprintf("cfx-legacy-%d", BASE_EXE_VERSION);
-	}
-
-	std::time_t t = std::time(nullptr);
-
-	static std::string curChannel = GetUpdateChannel();
-
-	auto session = json::object({ 
-		{ "sid", sid },
-		{ "did", g_entitlementSource },
-		{ "init", true },
-		{ "started", fmt::format("{:%Y-%m-%dT%H:%M:%S}Z", *std::gmtime(&t)) },
-		{ "attrs", json::object({
-			{ "release", version },
-			{ "environment", curChannel }
-		}) }
-	});
-
-	UpdateSession(session);
 }
 
 static json load_error_pickup()
@@ -249,6 +182,107 @@ static std::map<std::string, std::string> load_crashometry()
 	g_lastCrashometry = rv;
 
 	return rv;
+}
+
+static std::string SlugifyString(const std::string& text)
+{
+	std::string result;
+	result.reserve(text.size());
+
+	bool lastWasDelimiter = false;
+	for (char ch : text)
+	{
+		if (ch >= 'A' && ch <= 'Z')
+		{
+			result += (ch + ('a' - 'A'));
+			lastWasDelimiter = false;
+		}
+		else if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'))
+		{
+			result += ch;
+			lastWasDelimiter = false;
+		}
+		else
+		{
+			if (!lastWasDelimiter)
+			{
+				result += '-';
+				lastWasDelimiter = true;
+			}
+		}
+	}
+
+	size_t start = result.find_first_not_of('-');
+	if (start == std::string::npos) return "";
+	size_t end = result.find_last_not_of('-');
+	return result.substr(start, end - start + 1);
+}
+
+static void OnStartSession()
+{
+	auto oldSession = load_json_file(L"data\\cache\\session");
+
+	if (!oldSession.is_null())
+	{
+		oldSession["status"] = "abnormal";
+		send_sentry_session(oldSession);
+
+		_wunlink(MakeRelativeCitPath(L"data\\cache\\session").c_str());
+	}
+
+	UUID uuid;
+	UuidCreate(&uuid);
+	char* str;
+	UuidToStringA(&uuid, (RPC_CSTR*)&str);
+
+	std::string sid = str;
+
+	RpcStringFreeA((RPC_CSTR*)&str);
+
+	auto crashometry = load_crashometry();
+	std::string userId = "0";
+	if (crashometry.find("RockstarId") != crashometry.end())
+	{
+		userId = crashometry["RockstarId"];
+	}
+
+	FILE* f = _wfopen(MakeRelativeCitPath(L"citizen/release.txt").c_str(), L"r");
+	std::string version;
+
+	if (f)
+	{
+		char ver[128];
+
+		fgets(ver, sizeof(ver), f);
+		fclose(f);
+
+		version = fmt::sprintf("cfx-%d", atoi(ver));
+	}
+	else
+	{
+		version = fmt::sprintf("cfx-legacy-%d", BASE_EXE_VERSION);
+	}
+
+	std::time_t t = std::time(nullptr);
+
+	static std::string curChannel = SlugifyString(GetUpdateChannel());
+
+	auto session = json::object({
+		{ "sid", sid },
+		{ "did", userId },
+		{ "init", true },
+		{ "attrs", json::object({
+			{ "release", version },
+			{ "environment", curChannel }
+		}) }
+	});
+
+	tm time{};
+	if (gmtime_s(&time, &t) == 0) {
+		session["started"] = fmt::format("{:%Y-%m-%dT%H:%M:%S}Z", time);
+	}
+
+	UpdateSession(session);
 }
 
 static std::wstring crashHash;
@@ -386,8 +420,7 @@ static void OverloadCrashData(TASKDIALOGCONFIG* config)
 	if (wcsstr(crashHash.c_str(), L"nvwgf"))
 	{
 		blame = L"NVIDIA GPU drivers";
-		blame_two = L"This is not the fault of the " PRODUCT_NAME L" developers, and can not be resolved by them. NVIDIA does not provide any error reporting contacts to use to report this problem, nor do they provide "
-			L"debugging information that the developers can use to resolve this issue.";
+		blame_two = L"Please try updating your NVIDIA drivers, restarting your PC and then starting the game again.";
 	}
 
 	if (wcsstr(crashHash.c_str(), L"guard64"))
@@ -494,7 +527,6 @@ static std::wstring UnblameCrash(const std::wstring& hash)
 	return retval;
 }
 
-void SteamInput_Reset();
 void NVSP_ShutdownSafely();
 
 // c/p from ros-patches:five
@@ -514,29 +546,6 @@ DEFINE_GUID(CfxStorageGuid,
 	0x38d8f400, 0xaa8a, 0x4784, 0xa9, 0xf0, 0x26, 0xa0, 0x86, 0x28, 0x57, 0x7e);
 
 #pragma comment(lib, "rpcrt4.lib")
-
-std::string GetOwnershipPath()
-{
-	PWSTR appDataPath;
-	if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &appDataPath))) {
-		std::string cfxPath = ToNarrow(appDataPath) + "\\DigitalEntitlements";
-		CreateDirectory(ToWide(cfxPath).c_str(), nullptr);
-
-		CoTaskMemFree(appDataPath);
-
-		RPC_CSTR str;
-		UuidToStringA(&CfxStorageGuid, &str);
-
-		cfxPath += "\\";
-		cfxPath += (char*)str;
-
-		RpcStringFreeA(&str);
-
-		return cfxPath;
-	}
-
-	return "";
-}
 
 #include "mz.h"
 #include "mz_os.h"
@@ -680,66 +689,6 @@ static void GatherCrashInformation()
 
 #include <rapidjson/document.h>
 #include <rapidjson/writer.h>
-
-bool LoadOwnershipTicket()
-{
-	std::string filePath = GetOwnershipPath();
-
-	FILE* f = _wfopen(ToWide(filePath).c_str(), L"rb");
-
-	if (!f)
-	{
-		return false;
-	}
-
-	std::vector<uint8_t> fileData;
-	int pos;
-
-	// get the file length
-	fseek(f, 0, SEEK_END);
-	pos = ftell(f);
-	fseek(f, 0, SEEK_SET);
-
-	// resize the buffer
-	fileData.resize(pos);
-
-	// read the file and close it
-	fread(&fileData[0], 1, pos, f);
-
-	fclose(f);
-
-	// decrypt the stored data - setup blob
-	DATA_BLOB cryptBlob;
-	cryptBlob.pbData = &fileData[0];
-	cryptBlob.cbData = fileData.size();
-
-	DATA_BLOB outBlob;
-
-	// call DPAPI
-	if (CryptUnprotectData(&cryptBlob, nullptr, nullptr, nullptr, nullptr, 0, &outBlob))
-	{
-		// parse the file
-		std::string data(reinterpret_cast<char*>(outBlob.pbData), outBlob.cbData);
-
-		// free the out data
-		LocalFree(outBlob.pbData);
-
-		rapidjson::Document doc;
-		doc.Parse(data.c_str(), data.size());
-
-		if (!doc.HasParseError())
-		{
-			if (doc.IsObject())
-			{
-				g_entitlementSource = doc["guid"].GetString();
-				return true;
-			}
-		}
-	}
-
-	return false;
-}
-
 #include "UserLibrary.h"
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
@@ -789,6 +738,59 @@ static LPTHREAD_START_ROUTINE GetFunc(HANDLE hProcess, const char* name)
 extern nlohmann::json SymbolicateCrash(HANDLE hProcess, HANDLE hThread, PEXCEPTION_RECORD er, PCONTEXT ctx);
 extern void ParseSymbolicCrash(nlohmann::json& crash, std::string* signature, std::string* stackTrace);
 
+static void PruneCrashDumps()
+{
+	auto crashDirectory = MakeRelativeCitPath(L"crashes");
+	constexpr size_t kMaxDumps = 10;
+
+	std::vector<std::pair<FILETIME, std::wstring>> dumpFiles;
+
+	WIN32_FIND_DATAW findData;
+	HANDLE hFind = FindFirstFileW((crashDirectory + L"\\*.dmp").c_str(), &findData);
+
+	if (hFind == INVALID_HANDLE_VALUE)
+	{
+		return;
+	}
+
+	do
+	{
+		std::wstring fileName = findData.cFileName;
+
+		// skip -full.dmp files, they are cleaned up alongside their parent
+		if (fileName.size() > 9 && fileName.substr(fileName.size() - 9) == L"-full.dmp")
+		{
+			continue;
+		}
+
+		dumpFiles.emplace_back(findData.ftCreationTime, crashDirectory + L"\\" + fileName);
+	} while (FindNextFileW(hFind, &findData));
+
+	FindClose(hFind);
+
+	if (dumpFiles.size() <= kMaxDumps)
+	{
+		return;
+	}
+
+	// sort by creation time, newest first
+	std::sort(dumpFiles.begin(), dumpFiles.end(), [](const auto& a, const auto& b)
+	{
+		return CompareFileTime(&a.first, &b.first) > 0;
+	});
+
+	for (size_t i = kMaxDumps; i < dumpFiles.size(); i++)
+	{
+		const auto& path = dumpFiles[i].second;
+		DeleteFileW(path.c_str());
+
+		// also remove associated files
+		auto basePath = path.substr(0, path.size() - 4); // strip .dmp
+		DeleteFileW((basePath + L"-full.dmp").c_str());
+		DeleteFileW((path + L".gamelog").c_str());
+	}
+}
+
 void InitializeDumpServer(int inheritedHandle, int parentPid)
 {
 	static bool g_running = true;
@@ -820,6 +822,8 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 
 	CrashGenerationServer::OnClientDumpRequestCallback dumpCallback = [] (void*, const ClientInfo* info, const std::wstring* filePath)
 	{
+		PruneCrashDumps();
+
 		// we're going to be reporting, make a new event
 		auto crashReportIdx = InterlockedIncrement(&numCrashReports) - 1;
 		HANDLE crashReport = NULL;
@@ -1155,12 +1159,6 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 				info = nullptr;
 
 				std::map<std::wstring, std::wstring> parameters;
-				LoadOwnershipTicket();
-
-				if (g_entitlementSource.empty())
-				{
-					g_entitlementSource = "default";
-				}
 
 				FILE* f = _wfopen(MakeRelativeCitPath(L"citizen/release.txt").c_str(), L"r");
 
@@ -1178,16 +1176,23 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 					parameters[L"Version"] = va(L"cfx-legacy-%d", BASE_EXE_VERSION);
 				}
 
-				parameters[L"BuildID"] = L"20170101";
-				parameters[L"UserID"] = ToWide(g_entitlementSource);
-
 				auto crashometry = load_crashometry();
+
+				std::string userId = "0";
+				if (crashometry.find("RockstarId") != crashometry.end())
+				{
+					userId = crashometry["RockstarId"];
+					crashometry.erase("RockstarId");
+				}
+
+				parameters[L"BuildID"] = L"20170101";
+				parameters[L"UserID"] = ToWide(userId);
 
 				parameters[L"Product"] = PRODUCT_NAME;
 
 				parameters[L"GameBuild"] = ToWide(xbr::GetCurrentGameBuildString());
 
-				parameters[L"ReleaseChannel"] = ToWide(GetUpdateChannel());
+				parameters[L"ReleaseChannel"] = ToWide(SlugifyString(GetUpdateChannel()));
 
 				parameters[L"AdditionalData"] = GetAdditionalData();
 
@@ -1237,6 +1242,11 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 								}
 							}
 						}
+
+						if (gameProcess != parentProcess)
+						{
+							CloseHandle(gameProcess);
+						}
 					}
 				}
 
@@ -1255,6 +1265,14 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 				// avoid libcef.dll subprocess crashes terminating the entire job
 				bool shouldTerminate = true;
 				bool shouldUpload = true;
+
+				{
+					auto errorPickup = load_error_pickup();
+					if (!errorPickup.is_null() && errorPickup.contains("no_upload") && errorPickup["no_upload"].get<bool>())
+					{
+						shouldUpload = false;
+					}
+				}
 
 				if (GetProcessId(parentProcess) != GetProcessId(process_handle))
 				{
@@ -1384,7 +1402,7 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 					{
 						windowTitle = L"Fatal Error";
 						mainInstruction = L"Early-exit trap";
-						content = fmt::sprintf(L"A problem while running %s has tripped an early-exit trap.\n\nIf asking for support, please provide a readable 'report ID' from the expanded information below.", PRODUCT_NAME);
+						content = fmt::sprintf(L"An error occurred while running %s, triggering an early-exit trap.\n\nIf asking for support, please provide a readable ‘report ID’ from the expanded information below:", PRODUCT_NAME);
 					}
 					else
 					{
@@ -1457,6 +1475,11 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 									CloseHandle(hThread);
 								}
 							}
+
+							if (gameProcess != parentProcess)
+							{
+								CloseHandle(gameProcess);
+							}
 						}
 
 						// this only runs if shouldTerminate, right before termination (and after calling the terminate handler)
@@ -1469,7 +1492,10 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 
 					g_session["status"] = "crashed";
 
-					UpdateSession(g_session);
+					if (shouldUpload)
+					{
+						UpdateSession(g_session);
+					}
 				}
 
 				uploadError = false;
@@ -1655,6 +1681,7 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 				parameters[L"Fatal"] = (shouldTerminate) ? L"true" : L"false";
 
 				// upload the actual minidump file as well
+#define CFX_CRASH_INGRESS_URL "https://crash-ingress.fivem.net"
 #if defined(CFX_CRASH_INGRESS_URL) && (defined(GTA_FIVE) || defined(IS_RDR3))
 				if (uploadCrashes && shouldUpload && HTTPUpload::SendMultipartPostRequest(va(L"%s/post", ToWide(CFX_CRASH_INGRESS_URL)), parameters, files, &timeout, &responseBody, &responseCode))
 				{
@@ -1739,7 +1766,6 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 	// revert NVSP disablement
 #ifdef LAUNCHER_PERSONALITY_MAIN
 	NVSP_ShutdownSafely();
-	SteamInput_Reset();
 
 	g_session["status"] = "exited";
 	UpdateSession(g_session);
@@ -1747,12 +1773,6 @@ void InitializeDumpServer(int inheritedHandle, int parentPid)
 	_wunlink(MakeRelativeCitPath(L"data\\cache\\error-pickup").c_str());
 	_wunlink(MakeRelativeCitPath(L"data\\cache\\session").c_str());
 #endif
-
-	// delete steam_appid.txt on last process exit to curb paranoia about MTL mod checks
-	// we don't use MakeRelativeGamePath as this'll make a `static` CfxInitState
-	{
-		_wunlink(fmt::format(L"{}\\steam_appid.txt", GetMinidumpGamePath()).c_str());
-	}
 
 	_wunlink(MakeRelativeCitPath(L"data\\cache\\extra_dump_info.bin").c_str());
 	_wunlink(MakeRelativeCitPath(L"data\\cache\\extra_dump_info2.bin").c_str());

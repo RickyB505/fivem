@@ -528,7 +528,7 @@ MumbleAudioOutput::ClientAudioState::~ClientAudioState()
 }
 
 DLL_EXPORT
-fwEvent<const std::wstring&, fwRefContainer<IMumbleAudioSink>*>
+fwEvent<const std::string&, fwRefContainer<IMumbleAudioSink>*>
 OnGetMumbleAudioSink;
 
 DLL_EXPORT
@@ -717,7 +717,9 @@ void MumbleAudioOutput::HandleClientConnect(const MumbleUser& user)
 		sendDescriptors[1].pOutputVoice = m_submixVoice;
 	}
 
-	const XAUDIO2_VOICE_SENDS sendList = { (m_submixVoice) ? 2 : 1, sendDescriptors };
+	uint32_t sendCount = (m_submixVoice) ? 2 : 1;
+
+	const XAUDIO2_VOICE_SENDS sendList = { sendCount , sendDescriptors };
 
 	IXAudio2SourceVoice* voice = nullptr;
 	HRESULT hr = xa2->CreateSourceVoice(&voice, &format, 0, 2.0f, state.get(), &sendList);
@@ -1497,15 +1499,6 @@ void MumbleAudioOutput::SetAudioDevice(const std::string& deviceId)
 
 	{
 		std::unique_lock<std::shared_mutex> _(m_clientsMutex);
-
-		for (auto& client : m_clients)
-		{
-			if (client.second)
-			{
-				m_ids.push_back(client.first);
-			}
-		}
-
 		// delete all clients
 		m_clients.clear();
 	}
@@ -1513,12 +1506,10 @@ void MumbleAudioOutput::SetAudioDevice(const std::string& deviceId)
 	// reinitialize audio device
 	InitializeAudioDevice();
 
-	// recreate clients
-	for (auto& client : m_ids)
+	m_client->GetState().ForAllUsers([this](const std::shared_ptr<MumbleUser>& user)
 	{
-		MumbleUser fakeUser(client);
-		HandleClientConnect(fakeUser);
-	}
+		HandleClientConnect(*user);
+	});
 }
 
 void MumbleAudioOutput::SetDistance(float distance)
@@ -1562,8 +1553,6 @@ void DuckingOptOut(WRL::ComPtr<IMMDevice> device);
 
 std::shared_ptr<lab::AudioContext> MumbleAudioOutput::GetAudioContext(const std::string& name)
 {
-	auto wideName = ToWide(name);
-
 	std::shared_lock<std::shared_mutex> _(m_clientsMutex);
 
 	for (auto& client : m_clients)
@@ -1575,7 +1564,7 @@ std::shared_ptr<lab::AudioContext> MumbleAudioOutput::GetAudioContext(const std:
 
 		auto user = m_client->GetState().GetUser(client.first);
 
-		if (!user || user->GetName() != wideName)
+		if (!user || user->GetName() != name)
 		{
 			continue;
 		}

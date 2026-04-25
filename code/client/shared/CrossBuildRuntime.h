@@ -17,20 +17,51 @@ namespace xbr
 // servers. We keep track of minor game builds only for `GetCurrentGameBuildString` (i.e. for hint files).
 // When there's no entry for a specific major game build, revision "0" will be assumed in the relevant code.
 //
+enum Build : int
+{
+	Patch_2026_1 = 3788,
 
-// TODO: Replace with the default game build once we use latest game build as default instead of the 1604 one.
-inline unsigned int GetLatestStableGameBuild()
+	Winter_2025 = 3751,
+
+	Summer_2025 = 3570,
+
+	Latest = Patch_2026_1,
+};
+
+inline int GetDefaultGTA5Build()
+{
+	return 3258;
+}
+
+inline int GetDefaultRDR3Build()
+{
+	return 1491;
+}
+
+#ifdef IS_FXSERVER
+inline const char* GetDefaultGTA5BuildString()
+{
+	return "3258";
+}
+
+inline const char* GetDefaultRDR3BuildString()
+{
+	return "1491";
+}
+#else
+inline int GetDefaultGameBuild()
 {
 #if defined(IS_RDR3)
-	return 1491;
+	return GetDefaultRDR3Build();
 #elif defined(GTA_FIVE)
-	return 3258;
+	return GetDefaultGTA5Build();
 #elif defined(GTA_NY)
 	return 43;
 #else
 	return 0;
 #endif
 }
+#endif
 
 struct GameBuildUniquifier
 {
@@ -118,13 +149,13 @@ inline int GetGameBuild()
 	// For GTA5 we may want to ignore the CLI build request and use the latest build.
 	// In this case the requested build behavior will be achieved by partially loading old update.rpf files in UpdateRpfOverrideMount.cpp.
 #ifdef GTA_FIVE
-	if (!GetReplaceExecutable() && GetRequestedGameBuild() < GetLatestStableGameBuild())
+	if (!GetReplaceExecutable() && GetRequestedGameBuild() < GetDefaultGameBuild())
 	{
 		static int buildNumber = -1;
 
 		if (buildNumber == -1)
 		{
-			buildNumber = GetLatestStableGameBuild();
+			buildNumber = GetDefaultGameBuild();
 		}
 
 		return buildNumber;
@@ -178,6 +209,18 @@ template<int Build>
 inline bool IsGameBuild()
 {
 	return GetGameBuild() == Build;
+}
+
+template<int Build>
+inline bool IsRequestedGameBuildOrGreater()
+{
+	return GetRequestedGameBuild() >= Build;
+}
+
+template<int Build>
+inline bool IsRequestedGameBuild()
+{
+	return GetRequestedGameBuild() == Build;
 }
 
 inline bool IsSupportedGameBuild(uint32_t targetBuild)

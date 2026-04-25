@@ -292,7 +292,7 @@ public:
 
 static hook::thiscall_stub<rage::ioInputSource*(CControl*, rage::ioInputSource*, int, int, bool, bool)> _control_getBinding([]()
 {
-	return hook::get_call(hook::get_pattern("40 88 6C 24 28 40 88 6C 24 20 E8 ? ? ? ? 41 8D", 10));
+	return hook::get_call(hook::get_pattern("E8 ? ? ? ? EB ? 8B 05 ? ? ? ? 89 03 8B 05"));
 });
 
 rage::ioInputSource* CControl::GetBinding(rage::ioInputSource& outParam, int controlIdx, int unkN1, bool secondaryBinding, bool fallback)
@@ -1441,6 +1441,9 @@ static HookFunction hookFunction([]()
 
 	game::AddCustomText("PM_PANE_CFX", "FiveM");
 
+	// Snapmatic gallery error message when not logged-in to the forum / Discourse account
+	game::AddCustomText("SG_PH_LS_CL_FL", "To upload Snapmatic photos to the forum, please log in to your Cfx.re account in the main menu.");
+
 	bindingManager.Initialize();
 
 	rage::OnInitFunctionEnd.Connect([](rage::InitFunctionType type)
@@ -1495,13 +1498,13 @@ static HookFunction hookFunction([]()
 	}
 
 	{
-		auto location = hook::get_pattern("8A 9C 33 ? 1F 00 00 48 8D");
+		auto location = hook::get_pattern("8A 9C 33 ? ? 00 00 48 8D");
 		hook::nop(location, 7);
 		hook::put<uint16_t>(location, 0x01B3);
 	}
 
 	{
-		auto location = hook::get_pattern<char>("80 BC 33 ? 1F 00 00 00 74 05");
+		auto location = hook::get_pattern<char>("80 BC 33 ? ? 00 00 00 74 05");
 		hook::nop(location, 10);
 		//hook::put<uint8_t>(location + 8, 0xEB);
 	}
@@ -1544,7 +1547,7 @@ static HookFunction hookFunction([]()
 	{
 		CControlMgr::Controls = hook::get_address<void*>(hook::get_pattern("74 09 48 8D 05 ? ? ? ? EB 07 48 8D 05", 5));
 		CControlMgr::kControlSize = *hook::get_pattern<int>("E8 ? ? ? ? 48 81 C3 ? ? ? ? 48 FF CF 75 EA", 8);
-		CControl::kMapperOffset = *hook::get_pattern<uint32_t>("48 63 04 B0 4C 8D 89 ? ? 00 00 B9 BF", 7);
+		CControl::kMapperOffset = *hook::get_pattern<uint32_t>("48 63 04 B0 4C 8D 89", 7);
 		CControl::kInputOffset = *hook::get_pattern<int>("0F 28 CA 48 8D 14 C0 4C 8D 44 24 ? C7 44 24", 0x1B);
 	}
 });

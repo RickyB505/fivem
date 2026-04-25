@@ -85,12 +85,12 @@ static LUID GetAdapterLUID()
 static InitFunction initFunction([]()
 {
 	static bool drawPerfEnabled = false;
-	static ConVar<bool> drawPerf("cl_drawPerf", ConVar_Archive, false, &drawPerfEnabled);
+	static ConVar<bool> drawPerf("cl_drawPerf", ConVar_Archive | ConVar_UserPref, false, &drawPerfEnabled);
 
 	static std::vector<std::tuple<std::shared_ptr<ConVar<bool>>, std::function<std::string()>>> drawPerfModules;
 	auto addDrawPerfModule = [](const std::string& convar, const std::string& label, std::function<std::string()>&& fn)
 	{
-		drawPerfModules.emplace_back(std::make_shared<ConVar<bool>>(convar, ConVar_Archive, true), std::move(fn));
+		drawPerfModules.emplace_back(std::make_shared<ConVar<bool>>(convar, ConVar_Archive | ConVar_UserPref, true), std::move(fn));
 
 		// enable it for console usage
 		seGetCurrentContext()->AddAccessControlEntry(se::Principal{ "system.extConsole" }, se::Object{ fmt::sprintf("command.%s", convar) }, se::AccessType::Allow);
@@ -143,7 +143,7 @@ static InitFunction initFunction([]()
 			}
 		}
 
-		if (!metrics.empty() && ImGui::Begin("DrawPerf", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize))
+		if (!metrics.empty() && ImGui::Begin("DrawPerf", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing))
 		{
 			int i = 0;
 			float spacing = ImGui::GetStyle().ItemSpacing.x;
@@ -167,10 +167,10 @@ static InitFunction initFunction([]()
 					draw_list->AddLine(ImVec2(p.x - spacing, p.y - 9999.f), ImVec2(p.x - spacing, p.y + 9999.f), ImGui::GetColorU32(ImGuiCol_Border));
 				}
 			}
+			ImGui::End();
 		}
 
 		ImGui::PopStyleVar();
-		ImGui::End();
 	});
 
 	addDrawPerfModule("cl_drawPerfFPS", "FPS", []() -> std::string
@@ -206,7 +206,7 @@ static InitFunction initFunction([]()
 		if (!cpuQuery)
 		{
 			PdhOpenQuery(NULL, NULL, &cpuQuery);
-			PdhAddEnglishCounter(cpuQuery, L"\\Processor Information(_Total)\\% Processor Time", NULL, &cpuTotal);
+			PdhAddEnglishCounter(cpuQuery, L"\\Processor Information(_Total)\\% Processor Utility", NULL, &cpuTotal);
 			PdhCollectQueryData(cpuQuery);
 		}
 
@@ -221,7 +221,7 @@ static InitFunction initFunction([]()
 			lastCpuQuery = timeGetTime();
 		}
 
-		return fmt::sprintf("CPU: %.0f%%", counterValCpu.doubleValue);
+		return fmt::sprintf("CPU: %.0f%%", std::min(counterValCpu.doubleValue, 100.0));
 	});
 
 	addDrawPerfModule("cl_drawGpuUsage", "GPU Usage", []() -> std::string

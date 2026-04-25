@@ -139,8 +139,6 @@ constexpr auto tuple_slice(Cont&& t)
 	std::make_index_sequence<I2 - I1>{});
 }
 
-static std::chrono::microseconds lastHitch;
-
 #ifdef GTA_FIVE
 #include <Hooking.h>
 #include <InputHook.h>
@@ -150,14 +148,12 @@ static decltype(&SetThreadExecutionState) origSetThreadExecutionState;
 static decltype(&PeekMessageW) origPeekMessageW;
 
 static std::chrono::microseconds lastPeekMessage;
-static std::chrono::microseconds currentTotal;
 static bool currentWasFocusEvent = false;
 
 static EXECUTION_STATE WINAPI SetThreadExecutionState_Track(EXECUTION_STATE esFlags)
 {
 	if (esFlags == 3)
 	{
-		currentTotal = std::chrono::microseconds{ 0 };
 		currentWasFocusEvent = false;
 	}
 
@@ -174,21 +170,9 @@ static BOOL WINAPI PeekMessageW_Track(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin
 
 	// track just the PeekMessage call
 	// this will include internal wndproc invocations as well once other events run out
-	auto thisStart = usec();
 	auto rv = origPeekMessageW(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg);
-	auto thisEnd = usec();
 
-	currentTotal += (thisEnd - thisStart);
-	lastPeekMessage = thisEnd;
-
-	// if we're out of events, and didn't get a focus event generated anyway
-	if (!rv && !currentWasFocusEvent)
-	{
-		if (currentTotal > 30ms)
-		{
-			lastHitch = thisEnd;
-		}
-	}
+	lastPeekMessage = usec();
 
 	return rv;
 }
@@ -214,22 +198,22 @@ static TThreadStack* GetThread()
 
 static void __declspec(noinline) StoppedRespondingNVIDIA(const std::string& reasoning)
 {
-	FatalError(STOPPED_RESPONDING_MESSAGE("(NVIDIA drivers)"), reasoning);
+	FatalErrorNoReport(STOPPED_RESPONDING_MESSAGE("(NVIDIA drivers)"), reasoning);
 }
 
 static void __declspec(noinline) StoppedRespondingScripts(const std::string& reasoning)
 {
-	FatalError(STOPPED_RESPONDING_MESSAGE("(script deadloop)"), reasoning);
+	FatalErrorNoReport(STOPPED_RESPONDING_MESSAGE("(script deadloop)"), reasoning);
 }
 
 static void __declspec(noinline) StoppedRespondingRenderQuery(const std::string& reasoning)
 {
-	FatalError(STOPPED_RESPONDING_MESSAGE("(DirectX query)"), reasoning);
+	FatalErrorNoReport(STOPPED_RESPONDING_MESSAGE("(DirectX query)"), reasoning);
 }
 
 static void __declspec(noinline) StoppedRespondingGeneric(const std::string& reasoning)
 {
-	FatalError(STOPPED_RESPONDING_MESSAGE(""), reasoning);
+	FatalErrorNoReport(STOPPED_RESPONDING_MESSAGE(""), reasoning);
 }
 
 #ifdef GTA_FIVE
@@ -238,6 +222,16 @@ extern DLL_IMPORT bool IsInRenderQuery();
 
 static HookFunction hookFunctionGameTime([]()
 {
+#ifdef GTA_FIVE
+	// No, we are not a handheld PC.
+	if (xbr::IsGameBuildOrGreater<xbr::Build::Winter_2025>())
+	{
+		auto* addr = hook::get_pattern("FF 15 ? ? ? ? 48 85 C0 74 ? 48 8D 15");
+		hook::nop(addr, 6);
+		hook::put<uint32_t>(addr, 0x90C03148); // xor rax, rax; nop
+	}
+#endif
+
 	InputHook::DeprecatedOnWndProc.Connect([](HWND, UINT uMsg, WPARAM, LPARAM, bool&, LRESULT&)
 	{
 		// we want to ignore both focus-in and focus-out events
@@ -530,17 +524,6 @@ static InitFunction initFunction([]()
 				ImGui::Text(resourceTimeWarningText.c_str());
 				ImGui::Separator();
 				ImGui::Text("Please contact the server owner to resolve this issue.");
-			});
-		}
-		else if ((usec() - lastHitch) < 5s)
-		{
-			displayWarningDialog([]
-			{
-				ImGui::Text(va("/!\\ %s", gettext("Slow system performance detected")));
-				ImGui::Separator();
-				ImGui::Text("%s", gettext("A call into the Windows API took too long recently and led to a game stutter.").c_str());
-				ImGui::Separator();
-				ImGui::Text("%s", gettext("Please close any software you have running in the background (including Windows apps such as File Explorer or Task Manager).").c_str());
 			});
 		}
 #endif
@@ -906,9 +889,24 @@ static InitFunction initFunction([]()
 
 				for (const auto& poolData : poolsInfo)
 				{
-					if (!poolData.name._Starts_with(search))
+					if (search[0] != '\0')
 					{
-						continue;
+						std::string nameLower = poolData.name;
+						std::string itemsStr = std::to_string(poolData.items);
+						std::string maxItemsStr = std::to_string(poolData.maxItems);
+						std::string searchLower = search;
+
+						std::transform(nameLower.begin(), nameLower.end(), nameLower.begin(), ::tolower);
+						std::transform(itemsStr.begin(), itemsStr.end(), itemsStr.begin(), ::tolower);
+						std::transform(maxItemsStr.begin(), maxItemsStr.end(), maxItemsStr.begin(), ::tolower);
+						std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::tolower);
+
+						if (nameLower.find(searchLower) == std::string::npos &&
+							itemsStr.find(searchLower) == std::string::npos &&
+							maxItemsStr.find(searchLower) == std::string::npos)
+						{
+							continue;
+						}
 					}
 
 					std::string humanSize;
@@ -988,35 +986,35 @@ static InitFunction initFunction([]()
 
 				if (assets.GetCount() > 1)
 				{
-					ImGuiListClipper clipper;
-					// -1 because 1st item in Entries always dummy in GTAV and RDR3
-					clipper.Begin(assets.GetCount() - 1);
+					std::vector<uint32_t> filteredIndices;
+					for (uint32_t i = 0; i < assets.GetCount(); i++)
+					{
+						if (assets[i].fileName && strstr(assets[i].fileName, search) != nullptr)
+						{
+							filteredIndices.push_back(i);
+						}
+					}
 
+					ImGuiListClipper clipper;
+
+					// -1 because 1st item in Entries always dummy in GTAV and RDR3
+					clipper.Begin(static_cast<int>(filteredIndices.size()));
 					while (clipper.Step())
 					{
-						for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
+						for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
 						{
-							int assetsIndex = row + 1;
-							if (!assets[assetsIndex].name)
-							{
-								continue;
-							}
-
-							const std::string name = assets[assetsIndex].name;
-							if (!name._Starts_with(search))
-							{
-								continue;
-							}
+							const uint32_t assetsIndex = filteredIndices[i];
 
 							const std::string datetime = PrettyFormatFileTime(assets[assetsIndex].timestamp);
 
 							ImGui::TableNextRow();
 							ImGui::TableNextColumn();
-							ImGui::Text("%s", assets[assetsIndex].name);
+							ImGui::Text("%s", assets[assetsIndex].fileName);
 							ImGui::TableNextColumn();
 							ImGui::Text("%s", datetime.c_str());
 						}
 					}
+					clipper.End();
 				}
 
 				ImGui::EndTable();
@@ -1027,3 +1025,4 @@ static InitFunction initFunction([]()
 	});
 #endif
 });
+

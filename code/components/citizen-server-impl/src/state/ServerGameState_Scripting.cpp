@@ -4,6 +4,7 @@
 #include <ServerInstanceBaseRef.h>
 #include <state/ServerGameState.h>
 
+#include <ResourceEventComponent.h>
 #include <ResourceManager.h>
 #include <ScriptEngine.h>
 #include <ScriptDeprecations.h>
@@ -19,6 +20,15 @@ void DisownEntityScript(const fx::sync::SyncEntityPtr& entity);
 
 static void Init()
 {
+
+
+	// If the entity is in its deleting/finalizing state we should not allow access to them
+	// This should only be used for natives that are not expected to work when an entity is actively being deleted
+	// i.e. setters, getting entity by network id / does exist, or any pool getter natives
+	static auto IsEntityValid = [](const fx::sync::SyncEntityPtr& entity) {
+		return entity && !entity->deleting && !entity->finalizing;
+	};
+
 	auto makeEntityFunction = [](auto fn, uintptr_t defaultValue = 0)
 	{
 		return [=](fx::ScriptContext& context)
@@ -131,7 +141,7 @@ static void Init()
 
 		auto entity = gameState->GetEntity(id);
 
-		if (!entity)
+		if (!IsEntityValid(entity))
 		{
 			context.SetResult(false);
 			return;
@@ -163,7 +173,7 @@ static void Init()
 
 		auto entity = gameState->GetEntity(id);
 
-		if (!entity || entity->finalizing || entity->deleting)
+		if (!IsEntityValid(entity))
 		{
 			context.SetResult(false);
 			return;
@@ -197,7 +207,7 @@ static void Init()
 
 		auto entity = gameState->GetEntity(0, id);
 
-		if (!entity)
+		if (!IsEntityValid(entity))
 		{
 			context.SetResult(0);
 			return;
@@ -253,19 +263,36 @@ static void Init()
 
 		auto entity = gameState->GetEntity(id);
 
-		if (!entity)
+		if (!IsEntityValid(entity))
 		{
 			throw std::runtime_error(va("Tried to access invalid entity: %d", id));
 		}
 
-		auto orphanMode = context.GetArgument<int>(1);
+		int rawOrphanMode = context.GetArgument<int>(1);
 
-		if (orphanMode < 0 || orphanMode > fx::sync::KeepEntity)
+		if (rawOrphanMode < 0 || rawOrphanMode > fx::sync::KeepEntity)
 		{
-			throw std::runtime_error(va("Tried to set entities (%d) orphan mode to an invalid orphan mode: %d", id, orphanMode));
+			throw std::runtime_error(va("Tried to set entities (%d) orphan mode to an invalid orphan mode: %d", id, rawOrphanMode));
 		}
 
-		entity->orphanMode = static_cast<fx::sync::EntityOrphanMode>(orphanMode);
+
+		fx::sync::EntityOrphanMode entityOrphanMode = static_cast<fx::sync::EntityOrphanMode>(rawOrphanMode);
+
+#ifdef STATE_FIVE
+		if (entity->type == fx::sync::NetObjEntityType::Train)
+		{
+			// recursively apply orphan mode to all of the trains children/parents
+			gameState->IterateTrainLink(entity, [entityOrphanMode](fx::sync::SyncEntityPtr& train) {
+				train->orphanMode = entityOrphanMode;
+
+				return true;
+			});
+		}
+		else
+#endif
+		{
+			entity->orphanMode = entityOrphanMode;
+		}
 
 		// if they set the orphan mode to `DeleteOnOwnerDisconnect` and the entity already doesn't have an owner then treat this as a `DELETE_ENTITY` call
 		if (entity->orphanMode == fx::sync::DeleteOnOwnerDisconnect && entity->firstOwnerDropped)
@@ -278,6 +305,20 @@ static void Init()
 	{
 		return entity->orphanMode;
 	}));
+
+#ifdef STATE_FIVE
+	fx::ScriptEngine::RegisterNativeHandler("SET_ENTITY_REMOTE_SYNCED_SCENES_ALLOWED", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		entity->allowRemoteSyncedScenes = context.GetArgument<bool>(1);
+
+		return true;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_ENTITY_REMOTE_SYNCED_SCENES_ALLOWED", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		return entity->allowRemoteSyncedScenes;
+	}));
+#endif
 
 	fx::ScriptEngine::RegisterNativeHandler("GET_ENTITY_COORDS", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
 	{
@@ -342,6 +383,7 @@ static void Init()
 		}
 		else
 		{
+#ifdef STATE_FIVE
 			auto en = entity->syncTree->GetEntityOrientation();
 			auto on = entity->syncTree->GetObjectOrientation();
 
@@ -385,6 +427,16 @@ static void Init()
 					resultVec.z = glm::degrees(resultVec.z);
 				}
 			}
+#elif STATE_RDR3
+
+			auto en = entity->syncTree->GetEntityOrientation();
+			if (en)
+			{
+				resultVec.x = en->rotX * 180.0f / pi;
+				resultVec.y = en->rotY * 180.0f / pi;
+				resultVec.z = en->rotZ * 180.0f / pi;
+			}
+#endif
 		}
 	};
 
@@ -483,6 +535,11 @@ static void Init()
 	{
 		return (int)GetEntityType(entity);
 	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_NET_TYPE_FROM_ENTITY", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		return entity->type;
+	}, -1));
 
 	fx::ScriptEngine::RegisterNativeHandler("SET_ROUTING_BUCKET_POPULATION_ENABLED", [](fx::ScriptContext& context)
 	{
@@ -652,7 +709,13 @@ static void Init()
 
 		if (context.GetArgumentCount() > 1 && doorsOpen)
 		{
-			doorStatus = vn->doorPositions[context.GetArgument<int>(1)];
+			const int index = context.GetArgument<int>(1);
+			if (index < 0 || index > 6)
+			{
+				return doorStatus;
+			}
+
+			doorStatus = vn->doorPositions[index];
 		}
 
 		return doorStatus;
@@ -716,9 +779,14 @@ static void Init()
 		bool tyreBurst = false;
 		bool wheelsFine = vn->tyresFine;
 
-		if (!wheelsFine && context.GetArgumentCount() > 1)
+		if (!wheelsFine)
 		{
-			int tyreID = context.GetArgument<int>(1);
+			const int tyreID = context.GetArgument<int>(1);
+			if (tyreID < 0 || tyreID > 15)
+			{
+				return tyreBurst;
+			}
+
 			bool completely = context.GetArgument<bool>(2);
 
 			int tyreStatus = vn->tyreStatus[tyreID];
@@ -1041,6 +1109,18 @@ static void Init()
 
 		return false;
 	}));
+	
+	fx::ScriptEngine::RegisterNativeHandler("GET_VEHICLE_TOTAL_REPAIRS", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto vn = entity->syncTree->GetVehicleHealth();
+
+		if (vn)
+		{
+			return vn->totalRepairs;
+		}
+
+		return 0;
+	}));
 
 	fx::ScriptEngine::RegisterNativeHandler("HAS_ENTITY_BEEN_MARKED_AS_NO_LONGER_NEEDED", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
 	{
@@ -1067,11 +1147,6 @@ static void Init()
 
 		return result;
 	}));
-
-	static auto IsEntityValid = [](const fx::sync::SyncEntityPtr& entity) {
-		// if we're deleting or finalizing our deletion then we don't want to be included in the list
-		return entity && !entity->deleting && !entity->finalizing;
-	};
 
 	fx::ScriptEngine::RegisterNativeHandler("GET_GAME_POOL", [](fx::ScriptContext& context)
 	{
@@ -1186,40 +1261,62 @@ static void Init()
 
 	fx::ScriptEngine::RegisterNativeHandler("GET_VEHICLE_PED_IS_IN", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
 	{
-		auto node = entity->syncTree->GetPedGameState();
-		bool lastVehicleArg = context.GetArgument<bool>(1);
+		 bool lastVehicleArg = context.GetArgument<bool>(1);
 
+		 // get the current resource manager
+		 auto resourceManager = fx::ResourceManager::GetCurrent();
 
-		// get the current resource manager
-		auto resourceManager = fx::ResourceManager::GetCurrent();
+		 // get the owning server instance
+		 auto instance = resourceManager->GetComponent<fx::ServerInstanceBaseRef>()->Get();
 
-		// get the owning server instance
-		auto instance = resourceManager->GetComponent<fx::ServerInstanceBaseRef>()->Get();
+		 // get the server's game state
+		 auto gameState = instance->GetComponent<fx::ServerGameState>();
 
-		// get the server's game state
-		auto gameState = instance->GetComponent<fx::ServerGameState>();
+		 int lastVeh = 0;
+		 int curVeh = 0;
 
-		if (!node)
-			return (uint32_t)0;
+#ifdef STATE_RDR3
+		 auto pedVehicleData = entity->syncTree->GetPedVehicleData();
+		 if (!pedVehicleData)
+			 return (uint32_t)0;
 
-		// If ped is not in a vehicle, or was not in a previous vehicle (depending on the lastVehicleArg) return 0
-		if ((lastVehicleArg == true && node->lastVehiclePedWasIn == -1) || (lastVehicleArg == false && node->curVehicle == -1))
-			return (uint32_t)0;
+		 if ((lastVehicleArg == true && pedVehicleData->lastVehiclePedWasIn == 0) || (lastVehicleArg == false && pedVehicleData->curVehicle == 0))
+			 return (uint32_t)0;
 
-		auto returnEntity = lastVehicleArg == true ? gameState->GetEntity(0, node->lastVehiclePedWasIn) : gameState->GetEntity(0, node->curVehicle);
+		 lastVeh = pedVehicleData->lastVehiclePedWasIn;
+		 curVeh = pedVehicleData->curVehicle;
 
-		if (!returnEntity)
-			return (uint32_t)0;
+#else
+		 auto node = entity->syncTree->GetPedGameState();
+		 if (!node)
+			 return (uint32_t)0;
 
-		// Return the entity
-		return gameState->MakeScriptHandle(returnEntity);
+		 // If ped is not in a vehicle, or was not in a previous vehicle (depending on the lastVehicleArg) return 0
+		 if ((lastVehicleArg == true && node->lastVehiclePedWasIn == -1) || (lastVehicleArg == false && node->curVehicle == -1))
+			 return (uint32_t)0;
+
+		 lastVeh = node->lastVehiclePedWasIn;
+		 curVeh = node->curVehicle;
+#endif
+
+		 auto returnEntity = lastVehicleArg == true ? gameState->GetEntity(0, lastVeh) : gameState->GetEntity(0, curVeh);
+
+		 if (!returnEntity)
+			 return (uint32_t)0;
+
+		 // Return the entity
+		 return gameState->MakeScriptHandle(returnEntity);
 	}));
 
 	fx::ScriptEngine::RegisterNativeHandler("GET_PED_IN_VEHICLE_SEAT", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
     {
         auto vn = entity->syncTree->GetVehicleGameState();
 
-        int seatArg = context.GetArgument<int>(1) + 2;
+		const int seatArg = context.GetArgument<int>(1) + 2;
+		if (seatArg < 0 || seatArg > 31)
+		{
+			return 0;
+		}
 
         // get the current resource manager
         auto resourceManager = fx::ResourceManager::GetCurrent();
@@ -1248,7 +1345,11 @@ static void Init()
     {
         auto vn = entity->syncTree->GetVehicleGameState();
 
-        int seatArg = context.GetArgument<int>(1) + 2;
+		const int seatArg = context.GetArgument<int>(1) + 2;
+		if (seatArg < 0 || seatArg > 31)
+		{
+			return 0;
+		}
 
         // get the current resource manager
         auto resourceManager = fx::ResourceManager::GetCurrent();
@@ -1280,6 +1381,18 @@ static void Init()
 		auto gameState = instance->GetComponent<fx::ServerGameState>();
 
 		gameState->DeleteEntity(entity);
+
+		return 0;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("DELETE_TRAIN", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto resourceManager = fx::ResourceManager::GetCurrent();
+		auto instance = resourceManager->GetComponent<fx::ServerInstanceBaseRef>()->Get();
+		auto gameState = instance->GetComponent<fx::ServerGameState>();
+
+		// ignore the engine checks, this will recursively delete the entire train
+		gameState->DeleteEntity<true>(entity);
 
 		return 0;
 	}));
@@ -1522,7 +1635,8 @@ static void Init()
 	fx::ScriptEngine::RegisterNativeHandler("SET_PLAYER_ROUTING_BUCKET", MakeClientFunction([](fx::ScriptContext& context, const fx::ClientSharedPtr& client)
 	{
 		if (context.GetArgumentCount() > 1)
-		{
+		{   
+			const char* player = context.GetArgument<char*>(0);
 			auto bucket = context.GetArgument<int>(1);
 
 			if (bucket >= 0)
@@ -1537,6 +1651,10 @@ static void Init()
 				auto gameState = instance->GetComponent<fx::ServerGameState>();
 
 				auto [lock, clientData] = gameState->ExternalGetClientData(client);
+
+				 // store old bucket for event
+				const auto oldBucket = clientData->routingBucket;
+
 				gameState->ClearClientFromWorldGrid(client);
 				clientData->routingBucket = bucket;
 				
@@ -1551,6 +1669,21 @@ static void Init()
 				{
 					playerEntity->routingBucket = bucket;
 				}
+
+				
+				auto eventManager = resourceManager->GetComponent<fx::ResourceEventManagerComponent>();
+				/*NETEV onPlayerBucketChange SERVER
+				/#*
+				 * Triggered when a routing bucket changed for a player on the server.
+				 *
+				 * @param player - The id of the player that changed bucket.
+				 * @param bucket - The new bucket that is placing the player into.
+				 * @param oldBucket - The old bucket where the player was previously in.
+				 *
+				 #/
+				  declare function onPlayerBucketChange(player: string, bucket: number, oldBucket: number): void;
+				*/
+				eventManager->TriggerEvent2("onPlayerBucketChange", {}, player, bucket, oldBucket);
 			}
 		}
 
@@ -1566,12 +1699,29 @@ static void Init()
 	{
 		if (context.GetArgumentCount() > 1)
 		{
+			const auto ent = context.GetArgument<uint32_t>(0);
 			auto bucket = context.GetArgument<int>(1);
+		 	int oldBucket = entity->routingBucket;
 
 			if (bucket >= 0)
 			{
 				entity->routingBucket = bucket;
 			}
+
+			auto resourceManager = fx::ResourceManager::GetCurrent();
+			auto eventManager = resourceManager->GetComponent<fx::ResourceEventManagerComponent>();
+			/*NETEV onEntityBucketChange SERVER
+			/#*
+			 * Triggered when a routing bucket changed for an entity on the server.
+			 *
+			 * @param entity - The entity id that changed bucket.
+			 * @param bucket - The new bucket that is placing the entity into.
+			 * @param oldBucket - The old bucket where the entity was previously in.
+			 *
+			#/
+			  declare function onEntityBucketChange(entity: string, bucket: number, oldBucket: number): void;
+			*/
+			eventManager->TriggerEvent2("onEntityBucketChange", {}, ent, bucket, oldBucket);
 		}
 
 		return true;
@@ -1606,6 +1756,62 @@ static void Init()
 		return resultVector;
 	}));
 
+	fx::ScriptEngine::RegisterNativeHandler("IS_PLAYER_IN_FREE_CAM_MODE", MakePlayerEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		if (const auto& syncTree = entity->syncTree)
+		{
+			if (const auto camData = syncTree->GetPlayerCamera(); camData->camMode != 0)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_PLAYER_FOCUS_POS", MakePlayerEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		scrVector resultVec = {};
+		const auto& syncTree = entity->syncTree;
+
+		if (!syncTree)
+		{
+			return resultVec;
+		}
+
+		const auto camData = syncTree->GetPlayerCamera();
+
+		if (!camData)
+		{
+			return resultVec;
+		}
+
+		float playerPos[3];
+		syncTree->GetPosition(playerPos);
+
+		switch (camData->camMode)
+		{
+			case 0:
+			default:
+				resultVec.x = playerPos[0];
+				resultVec.y = playerPos[1];
+				resultVec.z = playerPos[2];
+				break;
+			case 1:
+				resultVec.x = camData->freeCamPosX;
+				resultVec.y = camData->freeCamPosY;
+				resultVec.z = camData->freeCamPosZ;
+				break;
+			case 2:
+				resultVec.x = playerPos[0] + camData->camOffX;
+				resultVec.y = playerPos[1] + camData->camOffY;
+				resultVec.z = playerPos[2] + camData->camOffZ;
+				break;
+		}
+
+		return resultVec;
+	}));
+
 	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_CARRIAGE_ENGINE", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
 	{
 		auto train = entity->syncTree->GetTrainState();
@@ -1631,6 +1837,98 @@ static void Init()
 		auto train = entity->syncTree->GetTrainState();
 
 		return train ? train->carriageIndex : -1;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_STATE", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto train = entity->syncTree->GetTrainState();
+
+		return train ? train->trainState : -1;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("IS_TRAIN_CABOOSE", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto train = entity->syncTree->GetTrainState();
+
+		return train ? train->isCaboose : false;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("DOES_TRAIN_STOP_AT_STATIONS", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto train = entity->syncTree->GetTrainState();
+
+		return train ? train->stopAtStations : false;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_CRUISE_SPEED", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto train = entity->syncTree->GetTrainState();
+
+		return train ? train->cruiseSpeed : 0.0f;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_TRACK_INDEX", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto train = entity->syncTree->GetTrainState();
+
+		return train ? train->trackId : -1;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_FORWARD_CARRIAGE", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto train = entity->syncTree->GetTrainState();
+
+		if (!train)
+		{
+			return uint32_t(0);
+		}
+
+		if (train->isEngine)
+		{
+			return uint32_t(0);
+		}
+
+		auto resourceManager = fx::ResourceManager::GetCurrent();
+
+		auto instance = resourceManager->GetComponent<fx::ServerInstanceBaseRef>()->Get();
+
+		auto gameState = instance->GetComponent<fx::ServerGameState>();
+
+		auto forwardCarriage = gameState->GetEntity(0, train->linkedToForwardId);
+
+		return forwardCarriage ? gameState->MakeScriptHandle(forwardCarriage) : 0;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_BACKWARD_CARRIAGE", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto train = entity->syncTree->GetTrainState();
+
+		if (!train)
+		{
+			return uint32_t(0);
+		}
+
+		if (train->isCaboose)
+		{
+			return uint32_t(0);
+		}
+
+		auto resourceManager = fx::ResourceManager::GetCurrent();
+
+		auto instance = resourceManager->GetComponent<fx::ServerInstanceBaseRef>()->Get();
+
+		auto gameState = instance->GetComponent<fx::ServerGameState>();
+
+		auto backwardCarriage = gameState->GetEntity(0, train->linkedToBackwardId);
+
+		return backwardCarriage ? gameState->MakeScriptHandle(backwardCarriage) : 0;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_TRAIN_DIRECTION", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto train = entity->syncTree->GetTrainState();
+
+		return train ? train->direction : false;
 	}));
 
 	fx::ScriptEngine::RegisterNativeHandler("GET_PLAYER_FAKE_WANTED_LEVEL", MakePlayerEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
@@ -1815,6 +2113,12 @@ static void Init()
 #endif
 
 		return 0;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_PED_RELATIONSHIP_GROUP_HASH", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		auto ped = entity->syncTree->GetPedAI();
+		return ped ? ped->relationShip : 0;
 	}));
 
 	fx::ScriptEngine::RegisterNativeHandler("GET_ENTITY_SPEED", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
@@ -2183,6 +2487,204 @@ static void Init()
 
 		context.SetResult(player);
 	});
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_ENTITIES_IN_RADIUS", [](fx::ScriptContext& context)
+	{
+
+		// get the current resource manager
+		auto resourceManager = fx::ResourceManager::GetCurrent();
+
+		// get the owning server instance
+		auto instance = resourceManager->GetComponent<fx::ServerInstanceBaseRef>()->Get();
+
+		// get the server's game state
+		auto gameState = instance->GetComponent<fx::ServerGameState>();
+
+		float checkX = context.GetArgument<float>(0);
+		float checkY = context.GetArgument<float>(1);
+		float checkZ = context.GetArgument<float>(2);
+		float radius = context.GetArgument<float>(3);
+		float squaredMaxDistance = radius * radius;
+		int entityType = context.GetArgument<int>(4);
+		bool sortOutput = context.GetArgument<bool>(5);
+		fx::scrObject models = context.GetArgument<fx::scrObject>(6);
+
+		std::vector<int> modelList = fx::DeserializeObject<std::vector<int>>(models);
+		std::unordered_set<int> modelSet(modelList.begin(), modelList.end());
+
+		std::vector<std::pair<float, int>> entities;
+		std::shared_lock l(gameState->m_entityListMutex);
+
+		EntityType desiredType = EntityType::NoEntity;
+		if (entityType == 1)
+			desiredType = EntityType::Ped;
+		else if (entityType == 2)
+			desiredType = EntityType::Vehicle;
+		else if (entityType == 3)
+			desiredType = EntityType::Object;
+
+		for (auto& entity : gameState->m_entityList)
+		{
+			if (!IsEntityValid(entity) || GetEntityType(entity) != desiredType)
+				continue;
+
+			float position[3];
+			entity->syncTree->GetPosition(position);
+
+			float dx = position[0] - checkX;
+			float dy = position[1] - checkY;
+			float dz = position[2] - checkZ;
+			float distSq = dx * dx + dy * dy + dz * dz;
+
+			if (distSq >= squaredMaxDistance)
+				continue;
+
+			uint32_t modelHash = 0;
+			entity->syncTree->GetModelHash(&modelHash);
+
+			if (modelSet.empty() || modelSet.find(modelHash) != modelSet.end())
+			{
+				entities.push_back({ distSq, gameState->MakeScriptHandle(entity) });
+			}
+		}
+
+		if (sortOutput)
+		{
+			std::sort(entities.begin(), entities.end(), [](const auto& a, const auto& b)
+			{
+				return a.first < b.first;
+			});
+		}
+
+		std::vector<int> entityList;
+		entityList.reserve(entities.size());
+		for (auto& entry : entities)
+		{
+			entityList.push_back(entry.second);
+		}
+
+		context.SetResult(fx::SerializeObject(entityList));
+	});
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_SEAT_PED_IS_USING", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		 int currentSeat = -3;
+		 auto resourceManager = fx::ResourceManager::GetCurrent();
+		 auto instance = resourceManager->GetComponent<fx::ServerInstanceBaseRef>()->Get();
+		 auto gameState = instance->GetComponent<fx::ServerGameState>();
+
+#ifdef STATE_RDR3
+
+		 auto pedVehicleData = entity->syncTree->GetPedVehicleData();
+		 if (!pedVehicleData)
+			 return -3;
+
+		 currentSeat = pedVehicleData->curSeat != 0 ? pedVehicleData->curSeat - 2 : -3; // offset -2 just like client behaviour, if not in vehicle, return -3, works for Horses too
+
+#else
+		 auto pedGameState = entity->syncTree->GetPedGameState();
+		 if (!pedGameState)
+			 return -3;
+		 currentSeat = pedGameState->curVehicleSeat - 2;
+
+#endif
+
+		 return currentSeat;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("IS_PED_IN_ANY_VEHICLE", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		 bool inVehicle = false;
+
+#ifdef STATE_RDR3
+		 auto pedVehicleData = entity->syncTree->GetPedVehicleData();
+		 if (!pedVehicleData)
+			 return false;
+
+		 inVehicle = pedVehicleData->inVehicle;
+#else
+		 auto pedGameState = entity->syncTree->GetPedGameState();
+		 if (!pedGameState)
+			 return false;
+
+		 inVehicle = pedGameState->curVehicleSeat != -1;
+#endif
+
+		 return inVehicle;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("IS_PED_IN_VEHICLE", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		 const int vehEntity = context.GetArgument<int>(1);
+		 if (!vehEntity)
+			 return false;
+
+		 int vehicleId = 0;
+		 bool inVehicle = false;
+
+#ifdef STATE_RDR3
+
+		 auto pedVehicleData = entity->syncTree->GetPedVehicleData();
+		 if (!pedVehicleData)
+			 return false;
+
+		 inVehicle = pedVehicleData->inVehicle; 
+		 vehicleId = pedVehicleData->curVehicle; // 0 at first then always has a an id unlike fivem that resets to -1
+
+#else
+		 auto pedGameState = entity->syncTree->GetPedGameState();
+		 if (!pedGameState)
+			 return false;
+		 inVehicle = pedGameState->curVehicleSeat != -1;
+		 vehicleId = pedGameState->curVehicle != -1 ? pedGameState->curVehicle : 0;
+
+#endif
+
+		 if (!vehicleId || !inVehicle)
+			 return false;
+
+		 auto resourceManager = fx::ResourceManager::GetCurrent();
+		 auto instance = resourceManager->GetComponent<fx::ServerInstanceBaseRef>()->Get();
+		 auto gameState = instance->GetComponent<fx::ServerGameState>();
+
+		 auto veh = gameState->GetEntity(vehEntity);
+		 if (!veh)
+			 return false;
+
+		 return vehicleId == veh->handle;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("GET_MOUNT", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		 auto pedVehicleData = entity->syncTree->GetPedVehicleData();
+		 if (!pedVehicleData)
+			 return 0;
+
+		 const bool onHorse = pedVehicleData->onHorse;
+		 const int horseId = pedVehicleData->curHorse;
+		 if (!onHorse || !horseId)
+			 return 0;
+
+		 auto resourceManager = fx::ResourceManager::GetCurrent();
+		 auto instance = resourceManager->GetComponent<fx::ServerInstanceBaseRef>()->Get();
+		 auto gameState = instance->GetComponent<fx::ServerGameState>();
+
+		 auto horseEntity = gameState->GetEntity(0, horseId);
+		 if (!horseEntity || !IsEntityValid(horseEntity))
+			 return 0;
+
+		 const int ent = gameState->MakeScriptHandle(horseEntity);
+		 return ent;
+	}));
+
+	fx::ScriptEngine::RegisterNativeHandler("IS_PED_ON_MOUNT", makeEntityFunction([](fx::ScriptContext& context, const fx::sync::SyncEntityPtr& entity)
+	{
+		   auto pedVehicleData = entity->syncTree->GetPedVehicleData();
+		   if (!pedVehicleData)
+			   return false;
+			   
+		   return pedVehicleData->onHorse;
+	}));
 }
 
 static InitFunction initFunction([]()

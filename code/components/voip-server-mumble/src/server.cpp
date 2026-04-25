@@ -8,13 +8,13 @@
    are met:
 
    - Redistributions of source code must retain the above copyright notice,
-     this list of conditions and the following disclaimer.
+	 this list of conditions and the following disclaimer.
    - Redistributions in binary form must reproduce the above copyright notice,
-     this list of conditions and the following disclaimer in the documentation
-     and/or other materials provided with the distribution.
+	 this list of conditions and the following disclaimer in the documentation
+	 and/or other materials provided with the distribution.
    - Neither the name of the Developers nor the names of its contributors may
-     be used to endorse or promote products derived from this software without
-     specific prior written permission.
+	 be used to endorse or promote products derived from this software without
+	 specific prior written permission.
 
    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
    ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
@@ -29,6 +29,8 @@
    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 #include "StdInc.h"
+#include "server.h"
+
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
@@ -38,6 +40,7 @@
 #include <stdlib.h>
 
 #include "client.h"
+#include "ClientRegistry.h"
 #include "conf.h"
 #include "log.h"
 #include "memory.h"
@@ -49,8 +52,8 @@
 
 /* globals */
 bool_t shutdown_server;
-extern char *bindaddr;
-extern char *bindaddr6;
+extern char* bindaddr;
+extern char* bindaddr6;
 extern int bindport;
 extern int bindport6;
 int* udpsocks;
@@ -239,28 +242,26 @@ void Server_setupUDPSockets(struct sockaddr_storage* addresses[2], struct pollfd
 
 void Server_run()
 {
-	//checkIPversions();
+	// checkIPversions();
 
 	/* max clients + server sokets + client connecting that will be disconnected */
-	//pollfds = Memory_safeCalloc((getIntConf(MAX_CLIENTS) + nofServerSocks + 1) , sizeof(struct pollfd));
+	// pollfds = Memory_safeCalloc((getIntConf(MUMBLE_MAX_CLIENTS) + nofServerSocks + 1) , sizeof(struct pollfd));
 
 	/* Figure out bind address and port */
-	//struct sockaddr_storage** addresses = Server_setupAddressesAndPorts();
+	// struct sockaddr_storage** addresses = Server_setupAddressesAndPorts();
 
 	/* Prepare TCP sockets */
-	//Server_setupTCPSockets(addresses, pollfds);
+	// Server_setupTCPSockets(addresses, pollfds);
 
 	/* Prepare UDP sockets */
-	//Server_setupUDPSockets(addresses, pollfds);
+	// Server_setupUDPSockets(addresses, pollfds);
 
 	Log_info("uMurmur version %s ('%s') protocol version %d.%d.%d",
-		UMURMUR_VERSION, UMURMUR_CODENAME, PROTVER_MAJOR, PROTVER_MINOR, PROTVER_PATCH);
+	UMURMUR_VERSION, UMURMUR_CODENAME, PROTVER_MAJOR, PROTVER_MINOR, PROTVER_PATCH);
 	Log_info("Visit https://github.com/umurmur/umurmur");
 
 	/* Main server loop */
-	//Server_runLoop(pollfds);
-
-
+	// Server_runLoop(pollfds);
 
 	/* Disconnect clients and cleanup memory */
 	Client_disconnect_all();
@@ -288,8 +289,8 @@ void Server_shutdown()
 
 #include <thread>
 
-bool_t checkDecrypt(client_t *client, const uint8_t *encrypted, uint8_t *plain, unsigned int len);
-int Client_send_udp(client_t *client, uint8_t *data, int len);
+bool_t checkDecrypt(client_t* client, const uint8_t* encrypted, uint8_t* plain, unsigned int len);
+int Client_send_udp(client_t* client, uint8_t* data, int len);
 
 // #TODO: Once correctness is guaranteed have servers create ETW traces to
 // measure lock contention.
@@ -333,7 +334,7 @@ static void CleanupMumbleAddresses()
 {
 	{
 		std::lock_guard _(mumblePairsMutex);
-		for (auto it = mumblePairs.begin(); it != mumblePairs.end(); )
+		for (auto it = mumblePairs.begin(); it != mumblePairs.end();)
 		{
 			if (!it->second)
 			{
@@ -362,11 +363,18 @@ static void EnsureServerInitialized()
 
 std::shared_ptr<ConVar<bool>> mumble_disableServer;
 std::shared_ptr<ConVar<int>> mumble_maxClientsPerIP;
+std::shared_ptr<ConVar<bool>> mumble_allowExternalConnections;
 
 static InitFunction initFunction([]()
 {
 	mumble_disableServer = std::make_shared<ConVar<bool>>("mumble_disableServer", ConVar_None, false);
 	mumble_maxClientsPerIP = std::make_shared<ConVar<int>>("mumble_maxClientsPerIP", ConVar_None, 32);
+	mumble_allowExternalConnections = std::make_shared<ConVar<bool>>("mumble_allowExternalConnections", ConVar_None, false);
+
+	fx::ServerInstanceBase::OnServerCreate.Connect([](fx::ServerInstanceBase* instance)
+	{
+		g_clientRegistry = instance->GetComponent<fx::ClientRegistry>();
+	});
 
 	OnCreateTlsMultiplex.Connect([=](fwRefContainer<net::MultiplexTcpServer> multiplex)
 	{
@@ -381,10 +389,10 @@ static InitFunction initFunction([]()
 			{
 				if (bytes[0] == '\0' && bytes[1] == '\0')
 				{
-					uint32_t len = htonl(*(uint32_t*)&bytes[2]);
+					uint32_t len = ntohl(*(uint32_t*)&bytes[2]);
 
 					// hacky, actually should check parsing
-					if (bytes.size() < (len + 6))
+					if (bytes.size() < (static_cast<size_t>(len) + 6))
 					{
 						return net::MultiplexPatternMatchResult::InsufficientData;
 					}
@@ -465,17 +473,17 @@ static InitFunction initFunction([]()
 				{
 					return;
 				}
-				
+
 				if (data.size() > (1024 * 1024 * 25))
 				{
 					stream->Close();
 					return;
 				}
 
-				net::Span dataSpan {const_cast<uint8_t*>(data.data()), data.size()};
+				net::Span dataSpan{ const_cast<uint8_t*>(data.data()), data.size() };
 				const bool result = client->streamByteReader.Push<net::packet::ClientMumbleMessage>(dataSpan, [client](net::packet::ClientMumbleMessage& message)
 				{
-					if (message_t* msg = Msg_networkToMessage(message.data.GetValue().data() - 6/*mumble needs start at message type*/, message.data.GetValue().size() + 6))
+					if (message_t* msg = Msg_networkToMessage(message.data.GetValue().data() - 6 /*mumble needs start at message type*/, message.data.GetValue().size() + 6))
 					{
 						Mh_handle_message(client, msg);
 					}
@@ -493,6 +501,15 @@ static InitFunction initFunction([]()
 			stream->SetCloseCallback([=]()
 			{
 				ClearMumbleAddress(client->remote_udp);
+				if (!mumble_allowExternalConnections->GetValue())
+				{
+					int playerId = Client_getPlayerId(client, client->username);
+					if (playerId != -1)
+					{
+						std::unique_lock lock(g_clientIdsMutex);
+						g_clientIds.erase(playerId);
+					}
+				}
 
 				std::lock_guard _(g_mumbleClientMutex);
 				auto mapEntry = clientsPerIP.find(client->remote_tcp.GetHost());
@@ -530,7 +547,8 @@ static InitFunction initFunction([]()
 					i = 0;
 				}
 			}
-		}).detach();
+		})
+		.detach();
 	});
 
 	fx::ServerInstanceBase::OnServerCreate.Connect([](fx::ServerInstanceBase* instance)
@@ -551,22 +569,25 @@ static InitFunction initFunction([]()
 				return;
 			}
 
-			// is this a Mumble ping?
-			if (len == 12 && *(uint32_t*)data == 0)
+			if (mumble_allowExternalConnections->GetValue())
 			{
-				uint32_t ping[6];
-				memcpy(ping, data, len);
+				// is this a Mumble ping?
+				if (len == 12 && *(uint32_t*)data == 0)
+				{
+					uint32_t ping[6];
+					memcpy(ping, data, len);
 
-				ping[0] = htonl((uint32_t)((PROTVER_MAJOR << 16) | (PROTVER_MINOR << 8) | (PROTVER_PATCH)));
-				ping[3] = htonl((uint32_t)Client_count());
-				ping[4] = htonl((uint32_t)getIntConf(MAX_CLIENTS));
-				ping[5] = htonl((uint32_t)getIntConf(MAX_BANDWIDTH));
+					ping[0] = htonl((uint32_t)((PROTVER_MAJOR << 16) | (PROTVER_MINOR << 8) | (PROTVER_PATCH)));
+					ping[3] = htonl((uint32_t)Client_count());
+					ping[4] = htonl((uint32_t)getIntConf(MUMBLE_MAX_CLIENTS));
+					ping[5] = htonl((uint32_t)getIntConf(MAX_BANDWIDTH));
 
-				*intercepted = true;
+					*intercepted = true;
 
-				interceptor->Send(address, ping, sizeof(ping));
+					interceptor->Send(address, ping, sizeof(ping));
 
-				return;
+					return;
+				}
 			}
 
 			auto fromAddress = address.GetHostBytes();
@@ -593,9 +614,7 @@ static InitFunction initFunction([]()
 
 				while (Client_iterate(&itr) != nullptr)
 				{
-					if (itr->remote_udp == net::PeerAddress{} &&
-						(itr->remote_tcp.GetHostBytes() == fromAddress ||
-						 itr->remote_tcp.GetHostBytesV6() == fromAddress))
+					if (itr->remote_udp == net::PeerAddress{} && (itr->remote_tcp.GetHostBytes() == fromAddress || itr->remote_tcp.GetHostBytesV6() == fromAddress))
 					{
 						known = true;
 
@@ -682,26 +701,28 @@ static InitFunction initFunction([]()
 			len -= 4; /* Adjust for crypt header */
 			auto msgType = (UDPMessageType_t)((buffer[0] >> 5) & 0x7);
 
-			switch (msgType) {
-			case UDPVoiceSpeex:
-			case UDPVoiceCELTAlpha:
-			case UDPVoiceCELTBeta:
-				break;
-			case UDPVoiceOpus:
-				Client_voiceMsg(client, buffer, len);
-				break;
-			case UDPPing:
-				Log_debug("UDP Ping reply len %d", len);
-				Client_send_udp(client, buffer, len);
-				break;
-			default:
+			switch (msgType)
 			{
-				auto clientAddressString = Util_clientAddressToString(client);
-				Log_debug("Unknown UDP message type from %s port %d", clientAddressString, address.GetPort());
-				free(clientAddressString);
-				break;
-			}
+				case UDPVoiceSpeex:
+				case UDPVoiceCELTAlpha:
+				case UDPVoiceCELTBeta:
+					break;
+				case UDPVoiceOpus:
+					Client_voiceMsg(client, buffer, len);
+					break;
+				case UDPPing:
+					Log_debug("UDP Ping reply len %d", len);
+					Client_send_udp(client, buffer, len);
+					break;
+				default:
+				{
+					auto clientAddressString = Util_clientAddressToString(client);
+					Log_debug("Unknown UDP message type from %s port %d", clientAddressString, address.GetPort());
+					free(clientAddressString);
+					break;
+				}
 			}
 		});
-	}, 999);
+	},
+	999);
 });

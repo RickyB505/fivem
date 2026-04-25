@@ -400,11 +400,11 @@ static InitFunction initFunction([]()
 		auto srvEndpoints = instance->AddVariable<std::string>("sv_endpoints", ConVar_None, "");
 		auto lanVar = instance->AddVariable<bool>("sv_lan", ConVar_ServerInfo, false);
 
-		g_enforcedGameBuild = "1604";
-		auto enforceGameBuildVar = instance->AddVariable<fx::GameBuild>("sv_enforceGameBuild", ConVar_ReadOnly | ConVar_ServerInfo, "1604", &g_enforcedGameBuild);
+		g_enforcedGameBuild = xbr::GetDefaultGTA5BuildString();
+		auto enforceGameBuildVar = instance->AddVariable<fx::GameBuild>("sv_enforceGameBuild", ConVar_ReadOnly | ConVar_ServerInfo, xbr::GetDefaultGTA5BuildString(), &g_enforcedGameBuild);
 
-		g_replaceExecutable = true;
-		auto replaceExecutableVar = instance->AddVariable<bool>("sv_replaceExeToSwitchBuilds", ConVar_ReadOnly | ConVar_ServerInfo, true, &g_replaceExecutable);
+		g_replaceExecutable = false;
+		auto replaceExecutableVar = instance->AddVariable<bool>("sv_replaceExeToSwitchBuilds", ConVar_ReadOnly | ConVar_ServerInfo, false, &g_replaceExecutable);
 
 		auto poolSizesIncrease = std::make_shared<std::unordered_map<std::string, uint32_t>>();
 		auto poolSizesIncreaseVar = instance->AddVariable<std::string>("sv_poolSizesIncrease", ConVar_ServerInfo | ConVar_Internal, "");
@@ -418,8 +418,8 @@ static InitFunction initFunction([]()
 			{
 				previousTitle = gameName;
 
-				std::string limitsFileUrl = "https://content.cfx.re/mirrors/client/pool-size-limits/";
-				limitsFileUrl += gameName == fx::GameName::GTA5 ? "fivem.json" : "redm.json";
+				std::string limitsFileUrl = "https://gss.cfx-services.net/v1/pool-size-limits/";
+				limitsFileUrl += gameName == fx::GameName::GTA5 ? "fivem" : "redm";
 
 				fx::PoolSizeManager::FetchLimits(limitsFileUrl, true);
 			}
@@ -427,7 +427,9 @@ static InitFunction initFunction([]()
 			auto validationError = fx::PoolSizeManager::Validate(poolName, sizeIncrease);
 			if (validationError.has_value())
 			{
-				trace("Requested pool size increase is invalid: %s\n", validationError.value());
+				console::PrintWarning(
+					_CFX_NAME_STRING(_CFX_COMPONENT_NAME),
+					fmt::sprintf("Requested pool size increase is invalid: %s\n.", validationError.value()));
 				return;
 			}
 
@@ -440,9 +442,9 @@ static InitFunction initFunction([]()
 		{
 			if (instance->GetComponent<fx::GameServer>()->GetGameName() == fx::GameName::RDR3)
 			{
-				if (g_enforcedGameBuild == "1604")
+				if (g_enforcedGameBuild == xbr::GetDefaultGTA5BuildString())
 				{
-					enforceGameBuildVar->GetHelper()->SetRawValue("1311");
+					enforceGameBuildVar->GetHelper()->SetRawValue(xbr::GetDefaultRDR3BuildString());
 				}
 			}
 
@@ -520,11 +522,6 @@ static InitFunction initFunction([]()
 
 			cb(json(nullptr));
 		});
-
-		auto experimentalStateBagsHandler = instance->AddVariable<bool>("sv_experimentalStateBagsHandler", ConVar_None, true);
-		auto experimentalOneSyncPopulation = instance->AddVariable<bool>("sv_experimentalOneSyncPopulation", ConVar_None, true);
-		// todo: remove fx::ServerGameState::GetGameEventHandler, fx::ServerGameState::GetHandler and fx::ServerGameState::GetRequestControlEventHandler when experimentalNetEvents is enabled by default and no longer a experiment
-		auto experimentalNetEvents = instance->AddVariable<bool>("sv_experimentalNetGameEventHandler", ConVar_None, false);
 
 		instance->GetComponent<fx::ClientMethodRegistry>()->AddHandler("initConnect", [=](const std::map<std::string, std::string>& postMap, const fwRefContainer<net::HttpRequest>& request, const std::function<void(const json&)>& cb)
 		{
@@ -698,23 +695,8 @@ static InitFunction initFunction([]()
 
 			json data = json::object();
 			data["protocol"] = 5;
-			
-			if (experimentalNetEvents->GetValue())
-			{
-				data["bitVersion"] = net::NetBitVersion::netVersion4;
-			}
-			else if (experimentalOneSyncPopulation->GetValue())
-			{
-				data["bitVersion"] = net::NetBitVersion::netVersion3;
-			}
-			else if (experimentalStateBagsHandler->GetValue())
-			{
-				data["bitVersion"] = net::NetBitVersion::netVersion2;
-			}
-			else
-			{
-				data["bitVersion"] = net::NetBitVersion::netVersion1;
-			}
+
+			data["bitVersion"] = net::NetBitVersion::netVersion5;
 
 			data["pure"] = pureVar->GetValue();
 			data["sH"] = shVar->GetValue();
@@ -722,10 +704,7 @@ static InitFunction initFunction([]()
 			data["onesync"] = fx::IsOneSync();
 			data["onesync_big"] = fx::IsBigMode();
 			data["onesync_lh"] = fx::IsLengthHack();
-			if (experimentalOneSyncPopulation->GetValue())
-			{
-				data["onesync_population"] = fx::IsOneSyncPopulation();
-			}
+			data["onesync_population"] = fx::IsOneSyncPopulation();
 
 			data["token"] = token;
 			data["gamename"] = gameName;

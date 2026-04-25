@@ -264,12 +264,15 @@ int MonoScriptRuntime::HandlesFile(char* filename, IScriptHostWithResourceData* 
 	}
 
 	// last supported date for this pilot of mono_rt2, in UTC
-	constexpr int maxYear = 2024, maxMonth = 12, maxDay = 31;
+	constexpr int maxYear = 2026, maxMonth = 6, maxDay = 30;
 
 	// Allowed values for mono_rt2
 	constexpr std::string_view allowedValues[] = {
 		// put latest on top, right here ↓
-	    "Prerelease expiring 2024-12-31. See https://aka.cfx.re/mono-rt2-preview for info."sv,
+		"Prerelease expiring 2026-06-30. See https://aka.cfx.re/mono-rt2-preview for info."sv,
+		"Prerelease expiring 2025-12-31. See https://aka.cfx.re/mono-rt2-preview for info."sv,
+		"Prerelease expiring 2025-06-30. See https://aka.cfx.re/mono-rt2-preview for info."sv,
+		"Prerelease expiring 2024-12-31. See https://aka.cfx.re/mono-rt2-preview for info."sv,
 		"Prerelease expiring 2024-06-30. See https://aka.cfx.re/mono-rt2-preview for info."sv,
 		"Prerelease expiring 2024-03-31. See https://aka.cfx.re/mono-rt2-preview for info."sv,
 		"Prerelease expiring 2023-12-31. See https://aka.cfx.re/mono-rt2-preview for info."sv,
@@ -379,6 +382,12 @@ result_t MonoScriptRuntime::RemoveRef(int32_t refIndex)
 {
 	fx::PushEnvironment env(this);
 	MonoComponentHost::EnsureThreadAttached();
+
+	if (m_appDomain == nullptr)
+	{
+		return FX_E_INVALIDARG;
+	}
+
 	MonoDomainScope scope(m_appDomain);
 
 	MonoException* exc = nullptr;

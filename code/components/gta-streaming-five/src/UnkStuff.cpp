@@ -20,8 +20,6 @@ static int ReturnTrue()
 
 #include <Error.h>
 
-extern hook::cdecl_stub<rage::fiCollection*()> getRawStreamer;
-
 #define VFS_GET_RCD_DEBUG_INFO 0x30001
 
 struct GetRcdDebugInfoExtension
@@ -57,15 +55,15 @@ static void ErrorInflateFailure(char* ioData, char* requestData, int zlibError, 
 	}
 
 	// get the entry name
-	uint16_t fileIndex = (handle & 0xFFFF);
-	uint16_t collectionIndex = (handle >> 16);
+	uint16_t fileIndex = streaming::GetEntryIndex(handle);
+	uint16_t collectionIndex = streaming::GetCollectionIndex(handle);
 
 	auto spf = streaming::GetStreamingPackfileByIndex(collectionIndex);
 	auto collection = (rage::fiCollection*)(spf ? spf->packfile : nullptr);
 
-	if (!collection && collectionIndex == 0)
+	if (!collection && collectionIndex < 2)
 	{
-		collection = getRawStreamer();
+		collection = streaming::GetRawStreamerByIndex(collectionIndex);
 	}
 
 	std::string name = fmt::sprintf("unknown - handle %08x", handle);
@@ -81,7 +79,7 @@ static void ErrorInflateFailure(char* ioData, char* requestData, int zlibError, 
 	{
 		name = collection->GetEntryName(fileIndex);
 
-		if (collectionIndex == 0)
+		if (collectionIndex < 2)
 		{
 			// get the _raw_ file name
 			char fileNameBuffer[1024];
@@ -280,7 +278,7 @@ static HookFunction hookFunction([]()
 		hook::put<uint16_t>(hook::get_pattern("8B 45 30 48 8B 4F 20 41 BE FF FF 00 00", -6), 0xE990);
 
 		// population zone selection for network games
-		hook::put<uint8_t>(hook::pattern("74 63 45 8D 47 02 E8").count(1).get(0).get<void>(0), 0xEB);
+		hook::put<uint8_t>(hook::pattern("74 ? 45 8D 47 ? E8").count(1).get(0).get<void>(0), 0xEB);
 
 		// it seems in b2944 R* added a flag that ignore some netgame checks (scenarios, population, etc)
 

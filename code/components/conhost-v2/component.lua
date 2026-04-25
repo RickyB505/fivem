@@ -8,6 +8,7 @@ return function()
 			"rage:graphics",
 			"rage:nutsnbolts",
 			"nui:core",
+			"vendor:cpp-url"
 		}
 	end
 	
@@ -16,6 +17,8 @@ return function()
 		
 		includedirs { '../vendor/vulkan-headers/include/' }
 	end
+
+	includedirs { "../vendor/range-v3/include/", "../vendor/utfcpp/source" }
 
 	filter {}
 	

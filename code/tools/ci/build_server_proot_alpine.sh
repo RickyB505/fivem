@@ -14,7 +14,7 @@ if [ "$SKIP_NATIVES" == "" ]; then
 	gcc -O2 -shared -fpic -o cfx.so -I/usr/include/lua5.3/ lua_cfx.c
 
 	mkdir -p inp out
-	curl --http1.1 -sLo inp/natives_global.lua http://runtime.fivem.net/doc/natives.lua
+	curl --http1.1 -sLo inp/natives_global.lua https://static.cfx.re/natives/natives.lua
 
 	cd /src/ext/native-doc-gen
 	sh build.sh
@@ -48,6 +48,8 @@ EOF
 	lua5.3 codegen.lua inp/natives_global.lua cs_v2 server >/src/code/client/clrcore-v2/Native/NativesServer.cs
 
 	lua5.3 codegen.lua inp/natives_global.lua rpc server >/opt/cfx-server/citizen/scripting/rpc_natives.json
+
+	lua5.3 codegen.lua inp/natives_global.lua pointer_args server >/src/code/components/citizen-scripting-core/src/NativeTypesServer.h
 fi
 
 ## SETUP-CUTOFF
@@ -74,6 +76,7 @@ if [ ! -z "$CI_BRANCH" ] && [ ! -z "$CI_BUILD_NUMBER" ]; then
 
 	echo '#define GIT_DESCRIPTION "'$gitDescription'"' >>/src/code/shared/cfx_version.h
 	echo '#define GIT_TAG "'$CI_BUILD_NUMBER'"' >>/src/code/shared/cfx_version.h
+	echo '#define BUILD_ID "cfx-'$CI_PIPELINE_ID'"' >>/src/code/shared/cfx_version.h
 fi
 
 make clean

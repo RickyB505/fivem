@@ -27,14 +27,12 @@
 
 #include <lua.hpp>
 
+#include "ComponentExport.h"
+
 // Linkage specified in lua.hpp to include/link-against internal structure
 // definitions. Note, for ELF builds LUAI_FUNC will mark the function as hidden.
 // Lua5.4 is compiled as a C++ library.
-#if LUA_VERSION_NUM == 504
 #define LUA_INTERNAL_LINKAGE "C++"
-#else
-#define LUA_INTERNAL_LINKAGE "C"
-#endif
 
 // Utility macro for the constexpr if statement
 #define LUA_IF_CONSTEXPR if constexpr
@@ -69,7 +67,7 @@ enum class LuaProfilingMode : uint8_t
 /// </summary>
 namespace fx
 {
-#if LUA_VERSION_NUM >= 504 && defined(_WIN32)
+#if defined(_WIN32)
 #define LUA_USE_RPMALLOC
 #endif
 
@@ -82,12 +80,12 @@ private:
 	/// <summary>
 	/// Create a lua_State instance with a rpmalloc allocator.
 	/// </summary>
-	static lua_State* lua_rpmalloc_state(void*& opaque);
+	static COMPONENT_EXPORT(CITIZEN_SCRIPTING_LUA) lua_State* lua_rpmalloc_state(void*& opaque);
 
 	/// <summary>
 	/// Free/Dispose any additional resources associated with the Lua state.
 	/// </summary>
-	static void lua_rpmalloc_free(void* opaque);
+	static COMPONENT_EXPORT(CITIZEN_SCRIPTING_LUA) void lua_rpmalloc_free(void* opaque);
 
 	/// <summary>
 	/// Reference to the heap_t pointer. At the time of destruction lua_getallocf
@@ -104,9 +102,7 @@ public:
 #else
 		m_state = luaL_newstate();
 #endif
-#if LUA_VERSION_NUM >= 504
 		lua_gc(m_state, LUA_GCGEN, 0, 0);  /* GC in generational mode */
-#endif
 	}
 
 	~LuaStateHolder()
@@ -186,8 +182,6 @@ private:
 	int m_boundaryRoutine = 0;
 
 	void* m_parentObject = nullptr;
-
-	invoker::PointerField m_pointerFields[3];
 
 	int m_instanceId;
 
@@ -305,15 +299,15 @@ public:
 		return m_bookmarkHost;
 	}
 
-	LUA_INLINE invoker::PointerField* GetPointerFields()
-	{
-		return m_pointerFields;
-	}
-
 	LUA_INLINE const char* GetResourceName()
 	{
-		char* resourceName = "";
+		static const char* emptyResourceName = "";
+		char* resourceName = nullptr;
 		m_resourceHost->GetResourceName(&resourceName);
+		if (!resourceName)
+		{
+			return emptyResourceName;
+		}
 
 		return resourceName;
 	}
@@ -330,6 +324,16 @@ public:
 
 	lua_State* GetRunningThread();
 
+	lua_State* GetState()
+	{
+		return m_state.Get();
+	}
+
+	auto& GetPendingBookmarks()
+	{
+		return m_pendingBookmarks;
+	}
+
 	/// <summary>
 	/// Manage the fx::ProfilerComponent state while the script runtime is active
 	///
@@ -339,6 +343,10 @@ public:
 	/// e.g., DeleteFunctionReference, it requires an active script runtime.
 	/// </summary>
 	bool IScriptProfiler_Tick(bool begin);
+
+	// visible for testing
+	static COMPONENT_EXPORT(CITIZEN_SCRIPTING_LUA) const luaL_Reg* GetCitizenLibs();
+	static COMPONENT_EXPORT(CITIZEN_SCRIPTING_LUA) const luaL_Reg* GetLuaLibs();
 
 private:
 	result_t LoadFileInternal(OMPtr<fxIStream> stream, char* scriptFile);
@@ -382,6 +390,8 @@ public:
 	NS_DECL_ISCRIPTWARNINGRUNTIME;
 };
 
+int Lua_Print(lua_State* L);
+
 void ScriptTraceV(const char* string, fmt::printf_args formatList);
 
 template<typename... TArgs>
@@ -390,4 +400,5 @@ LUA_INLINE void ScriptTrace(const char* string, const TArgs&... args)
 	ScriptTraceV(string, fmt::make_printf_args(args...));
 }
 }
+
 #endif

@@ -83,6 +83,10 @@ public:
 	virtual std::function<bool()> GetGameEventHandlerWithEvent(const fx::ClientSharedPtr& client, const std::vector<uint16_t>& targetPlayers, net::packet::ClientNetGameEventV2& netGameEvent) = 0;
 
 	virtual bool IsClientRelevantEntity(const fx::ClientSharedPtr& client, uint32_t objectId) = 0;
+
+	virtual bool GetStateBagStrictMode() const = 0;
+
+	virtual bool IsNetGameEventBlocked(uint32_t eventNameHash) = 0;
 };
 }
 

@@ -201,12 +201,12 @@ int ObjectToEntity(int objectId);
 namespace sync
 {
 std::map<int, int> g_creationTokenToObjectId;
-std::map<int, uint32_t> g_objectIdToCreationToken;
+std::map<int, uint32_t> g_objectIdToCreationTokenRPC;
 
 static hook::cdecl_stub<void*(int handle)> getScriptEntity([]()
 {
 #if GTA_FIVE
-	return hook::pattern("44 8B C1 49 8B 41 08 41 C1 F8 08 41 38 0C 00").count(1).get(0).get<void>(-12);
+	return hook::get_call(hook::get_pattern("E8 ? ? ? ? 48 8B F8 48 85 C0 0F 84 ? ? ? ? 44 38 60"));
 #elif IS_RDR3
 	return hook::pattern("45 8B C1 41 C1 F8 08 45 38 0C 00 75 ? 8B 42 ? 41 0F AF C0").count(1).get(0).get<void>(-81);
 #endif
@@ -351,7 +351,7 @@ public:
 									fx::ScriptContextBuffer reqCtx;
 									reqCtx.Push(hash);
 
-									(*fx::ScriptEngine::GetNativeHandler(REQUEST_MODEL))(reqCtx);
+									fx::ScriptEngine::GetNativeHandler(REQUEST_MODEL)(reqCtx);
 								});
 
 								conditions.push_back([=]()
@@ -365,7 +365,7 @@ public:
 									fx::ScriptContextBuffer loadedCtx;
 									loadedCtx.Push(hash);
 
-									(*fx::ScriptEngine::GetNativeHandler(HAS_MODEL_LOADED))(loadedCtx);
+									fx::ScriptEngine::GetNativeHandler(HAS_MODEL_LOADED)(loadedCtx);
 
 									return loadedCtx.GetResult<bool>();
 								});
@@ -381,7 +381,7 @@ public:
 									fx::ScriptContextBuffer releaseCtx;
 									releaseCtx.Push(hash);
 
-									(*fx::ScriptEngine::GetNativeHandler(SET_MODEL_AS_NO_LONGER_NEEDED))(releaseCtx);
+									fx::ScriptEngine::GetNativeHandler(SET_MODEL_AS_NO_LONGER_NEEDED)(releaseCtx);
 								});
 							}
 
@@ -504,7 +504,7 @@ public:
 					{
 						try
 						{
-							CallHandler(*n, nativeHash, *executionCtx);
+							CallHandler(n, nativeHash, *executionCtx);
 						}
 						catch (std::exception& e)
 						{
@@ -528,7 +528,7 @@ public:
 
 									g_creationTokenToObjectId[creationToken] = (1 << 16) | obj;
 
-									g_objectIdToCreationToken[obj] = creationToken;
+									g_objectIdToCreationTokenRPC[obj] = creationToken;
 								}
 							}
 						}

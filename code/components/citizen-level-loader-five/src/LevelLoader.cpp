@@ -9,6 +9,7 @@
 
 #include <CrossBuildRuntime.h>
 #include <CoreConsole.h>
+#include <GameInit.h>
 #include "ICoreGameInit.h"
 #include "fiDevice.h"
 
@@ -23,6 +24,8 @@
 #include <concurrent_queue.h>
 
 #include "atArray.h"
+
+#include <SharedLegitimacyAPI.h>
 
 void DLL_IMPORT CfxCollection_AddStreamingFileByTag(const std::string& tag, const std::string& fileName, rage::ResourceFlags flags);
 
@@ -51,10 +54,12 @@ enum NativeIdentifiers : uint64_t
 	SET_ENTITY_COORDS = 0x621873ECE1178967,
 	LOAD_SCENE = 0x4448EB75B4904BDB,
 	SHUTDOWN_LOADING_SCREEN = 0x078EBE9809CCD637,
-	DO_SCREEN_FADE_IN = 0xD4E8E24955024033
+	DO_SCREEN_FADE_IN = 0xD4E8E24955024033,
+	FREEZE_ENTITY_POSITION = 0x428CA6DBD1094446,
+	ACTIVATE_ROCKSTAR_EDITOR = 0x49DA8145672B2725
 };
 
-class SpawnThread : public GtaThread
+class SpawnThread : public CfxThread
 {
 private:
 	bool m_doInityThings;
@@ -80,11 +85,11 @@ public:
 			NativeInvoke::Invoke<DO_SCREEN_FADE_IN, int>(0);
 
 			NativeInvoke::Invoke<SET_ENTITY_COORDS, int>(playerPedId, 293.089f, 180.466f, 104.301f);
-			NativeInvoke::Invoke<0x428CA6DBD1094446, int>(NativeInvoke::Invoke<0xD80958FC74E988A6, int>(), false);
+			NativeInvoke::Invoke<FREEZE_ENTITY_POSITION, int>(NativeInvoke::Invoke<PLAYER_PED_ID, int>(), false);
 
 			if (Instance<ICoreGameInit>::Get()->HasVariable("editorMode"))
 			{
-				NativeInvoke::Invoke<0x49DA8145672B2725, int>();
+				NativeInvoke::Invoke<ACTIVATE_ROCKSTAR_EDITOR, int>();
 				Instance<ICoreGameInit>::Get()->ClearVariable("editorMode");
 			}
 
@@ -270,6 +275,27 @@ static void SetCoreGameMode(Mode mode)
 	setVariable("storyMode", mode == Mode::STORY_MODE);
 	setVariable("localMode", mode == Mode::LOCAL_MODE || mode == Mode::EDITOR_MODE);
 	setVariable("editorMode", mode == Mode::EDITOR_MODE);
+
+	auto icgi = Instance<ICoreGameInit>::Get();
+
+	if (icgi->HasVariable("storyMode"))
+	{
+		cfx::legitimacy::SetSteamRichPresenceWrapper("status", "Playing Story Mode");
+		cfx::legitimacy::SetSteamRichPresenceWrapper("steam_display", "#Status_InStoryMode");
+	}
+	else if (icgi->HasVariable("editorMode"))
+	{
+		cfx::legitimacy::SetSteamRichPresenceWrapper("status", "In the Rockstar Editor");
+		cfx::legitimacy::SetSteamRichPresenceWrapper("steam_display", "#Status_InReplayEditor");
+	}
+	else if (icgi->HasVariable("localMode"))
+	{
+		std::string localName = "Unknown";
+		Instance<ICoreGameInit>::Get()->GetData("localResource", &localName);
+
+		cfx::legitimacy::SetSteamRichPresenceWrapper("status", fmt::format("Playing: {}", localName));
+		cfx::legitimacy::SetSteamRichPresenceWrapper("steam_display", "#Status_InStoryMode");
+	}
 }
 
 static void LoadLevel(const char* levelName, Mode mode)
@@ -501,12 +527,17 @@ static InitFunction initFunction([] ()
 
 	rage::scrEngine::OnScriptInit.Connect([] ()
 	{
-		rage::scrEngine::CreateThread(&spawnThread);
+		rage::scrEngine::CreateThread(spawnThread.GetThread());
 	}, INT32_MAX);
 
 	Instance<ICoreGameInit>::Get()->OnGameRequestLoad.Connect([]()
 	{
 		g_gameUnloaded = false;
+	});
+
+	OnKillNetwork.Connect([](const char* message)
+	{
+		cfx::legitimacy::ResetSteamRichPresenceWrapper();
 	});
 
 	Instance<ICoreGameInit>::Get()->OnShutdownSession.Connect([]()

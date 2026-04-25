@@ -48,9 +48,10 @@
 #include <packethandlers/RequestObjectIdsPacketHandler.h>
 
 #include "ByteWriter.h"
+#include "FormData.h"
 #include "Frame.h"
 
-constexpr const char kDefaultServerList[] = "https://servers-ingress-live.fivem.net/ingress";
+constexpr const char kDefaultServerList[] = "https://servers-frontend.fivem.net/api/serverlist/ingress";
 
 static fx::GameServer* g_gameServer;
 
@@ -114,6 +115,7 @@ namespace fx
 
 		m_rconPassword = instance->AddVariable<std::string>("rcon_password", ConVar_ReadOnly, "");
 		m_playersToken = instance->AddVariable<std::string>("sv_playersToken", ConVar_None, "");
+		m_profileDataToken = instance->AddVariable<std::string>("sv_profileDataToken", ConVar_None, "");
 		m_hostname = instance->AddVariable<std::string>("sv_hostname", ConVar_ServerInfo, "default FXServer");
 		m_masters[0] = instance->AddVariable<std::string>("sv_master1", ConVar_None, kDefaultServerList);
 		m_masters[1] = instance->AddVariable<std::string>("sv_master2", ConVar_None, "");
@@ -169,13 +171,13 @@ namespace fx
 				sigint->on<uvw::SignalEvent>([this](const uvw::SignalEvent& ev, uvw::SignalHandle& sig)
 				{
 					se::ScopedPrincipal principalScope(se::Principal{ "system.console" });
-					m_instance->GetComponent<console::Context>()->ExecuteSingleCommandDirect(ProgramArguments{ "quit", "SIGINT received" });
+					m_instance->GetComponent<console::Context>()->ExecuteSingleCommandDirect(ProgramArguments{ "quit", GetVariable("txAdminServerMode").empty() ? "SIGINT received" : "" });
 				});
 
 				sighup->on<uvw::SignalEvent>([this](const uvw::SignalEvent& ev, uvw::SignalHandle& sig)
 				{
 					se::ScopedPrincipal principalScope(se::Principal{ "system.console" });
-					m_instance->GetComponent<console::Context>()->ExecuteSingleCommandDirect(ProgramArguments{ "quit", "SIGHUP received" });
+					m_instance->GetComponent<console::Context>()->ExecuteSingleCommandDirect(ProgramArguments{ "quit", GetVariable("txAdminServerMode").empty() ? "SIGHUP received" : "" });
 				});
 
 				auto asyncInitHandle = std::make_shared<std::unique_ptr<UvHandleContainer<uv_async_t>>>();;
@@ -664,7 +666,7 @@ namespace fx
 					return;
 				}
 
-				auto postMap = ParsePOSTString(dataSpan);
+				auto postMap = net::DecodeFormData(dataSpan);
 				auto guid = postMap["guid"];
 				auto token = postMap["token"];
 
@@ -1355,7 +1357,7 @@ static InitFunction initFunction([]()
 		instance->SetComponent(new fx::UdpInterceptor());
 
 		instance->SetComponent(
-			WithPacketHandler<RoutingPacketHandler, IHostPacketHandler, IQuitPacketHandler, HeHostPacketHandler, ServerEventPacketHandler, ServerCommandPacketHandler, TimeSyncReqPacketHandler, StateBagPacketHandler, StateBagPacketHandlerV2, NetGameEventPacketHandlerV2, ArrayUpdatePacketHandler, ReassembledEventPacketHandler, RequestObjectIdsPacketHandler, GameStateNAckPacketHandler, GameStateAckPacketHandler>(
+			WithPacketHandler<RoutingPacketHandler, IHostPacketHandler, IQuitPacketHandler, HeHostPacketHandler, ServerEventPacketHandler, ServerCommandPacketHandler, TimeSyncReqPacketHandler, StateBagPacketHandler, StateBagPacketHandlerV2, NetGameEventPacketHandlerV2, ArrayUpdatePacketHandler, ReassembledEventPacketHandler, ReassembledEventV2PacketHandler, RequestObjectIdsPacketHandler, GameStateNAckPacketHandler, GameStateAckPacketHandler>(
 				WithProcessTick<ThreadWait, GameServerTick>(
 					WithOutOfBand<GetInfoOutOfBand, GetStatusOutOfBand, RconOutOfBand>(
 						WithEndPoints(
@@ -1370,19 +1372,4 @@ static InitFunction initFunction([]()
 		instance->SetComponent(new fx::PeerAddressRateLimiterStore(instance->GetComponent<console::Context>().GetRef()));
 		instance->SetComponent(new HostVoteCount());
 	});
-
-	fx::ServerInstanceBase::OnServerCreate.Connect([](fx::ServerInstanceBase* instance)
-	{
-		auto consoleCtx = instance->GetComponent<console::Context>();
-
-		// start sessionmanager
-		if (instance->GetComponent<fx::GameServer>()->GetGameName() == fx::GameName::RDR3)
-		{
-			consoleCtx->ExecuteSingleCommandDirect(ProgramArguments{ "start", "sessionmanager-rdr3" });
-		}
-		else
-		{
-			consoleCtx->ExecuteSingleCommandDirect(ProgramArguments{ "start", "sessionmanager" });
-		}
-	}, INT32_MAX);
 });

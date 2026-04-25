@@ -25,6 +25,7 @@
 #include <PrintListener.h>
 
 #include <ResourceStreamComponent.h>
+#include <ResourceConfigurationCacheComponent.h>
 #include <EventReassemblyComponent.h>
 
 #include <KeyedRateLimiter.h>
@@ -256,7 +257,7 @@ static void ScanResources(fx::ServerInstanceBase* instance)
 static class : public fx::EventReassemblySink
 {
 public:
-	virtual void SendPacket(int target, std::string_view packet) override
+	void SendPacket(const int target, std::string_view packet) override
 	{
 		auto client = instance->GetComponent<fx::ClientRegistry>()->GetClientByNetID(target);
 
@@ -270,7 +271,31 @@ public:
 		}
 	}
 
-	virtual bool LimitEvent(int source) override
+	void SendPacketV2(const int target, net::packet::ReassembledEventV2Packet& packet) override
+	{
+		auto client = instance->GetComponent<fx::ClientRegistry>()->GetClientByNetID(target);
+
+		if (!client)
+		{
+			return;
+		}
+
+		const size_t kPacketSize = net::SerializableComponent::GetSize(packet);
+
+		net::Buffer responseBuffer(kPacketSize);
+		net::ByteWriter writer{ responseBuffer.GetBuffer(), kPacketSize };
+		if (!packet.Process(writer))
+		{
+			trace("Serialization of the server reassembled event failed. Please report this error at https://github.com/citizenfx/fivem.\n");
+			return;
+		}
+
+		responseBuffer.Seek(writer.GetOffset());
+
+		client->SendPacket(1, responseBuffer);
+	}
+
+	bool LimitEvent(const int source) override
 	{
 		static fx::RateLimiterStore<uint32_t, false> netEventRateLimiterStore{ instance->GetComponent<console::Context>().GetRef() };
 		static auto netEventRateLimiter = netEventRateLimiterStore.GetRateLimiter("netEvent", fx::RateLimiterDefaults{ 50.f, 200.f });
@@ -828,6 +853,19 @@ static InitFunction initFunction([]()
 
 void fx::ServerEventComponent::TriggerClientEvent(const std::string_view& eventName, const void* data, size_t dataLen, const std::optional<std::string_view>& targetSrc)
 {
+	// 1+MB
+	if (dataLen >= 1000000)
+	{
+		auto timeNow = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now().time_since_epoch());
+		static std::chrono::milliseconds lastWarning{0};
+		if (timeNow - lastWarning >= std::chrono::seconds(5))
+		{
+			StructuredTrace({ "type", "large_event_warning" }, { "event_type", "regular" }, { "event_name", eventName }, { "event_size", dataLen });
+			trace("Warning: sending large event %s (%u bytes). This may cause performance issues. Consider using latent events instead.\n", eventName, dataLen);
+			lastWarning = timeNow;
+		}
+	}
+
 	// build the target event
 	net::Buffer outBuffer;
 	outBuffer.Write(0x7337FD7A);
@@ -1034,6 +1072,9 @@ static InitFunction initFunction2([]()
 		tempStr = sf->GetCacheString();
 		
 		context.SetResult<const char*>(tempStr.c_str());
+
+		auto& configurationCache = resource->GetComponent<fx::ResourceConfigurationCacheComponent>();
+		configurationCache->Invalidate();
 	});
 
 	fx::ScriptEngine::RegisterNativeHandler("SET_GAME_TYPE", [](fx::ScriptContext& context)

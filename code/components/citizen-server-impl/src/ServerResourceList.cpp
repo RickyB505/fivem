@@ -91,6 +91,15 @@ void ServerResourceList::ScanResources(const std::string& resourceRoot, ScanResu
 					}
 				}
 
+				// these are now in "system_resources"
+				if (findData.name == "yarn" || findData.name == "webpack")
+				{
+					if (!isSystemResourceRoot)
+					{
+						continue;
+					}
+				}
+
 				if (findData.attributes & FILE_ATTRIBUTE_DIRECTORY)
 				{
 					std::string resPath(thisPath + "/" + findData.name);
@@ -110,6 +119,13 @@ void ServerResourceList::ScanResources(const std::string& resourceRoot, ScanResu
 					else if (scannedNow.find(findData.name) == scannedNow.end())
 					{
 						const auto& resourceName = findData.name;
+
+						// ignore hidden folders and txAdmin
+						if (resourceName[0] == '.' || boost::algorithm::to_lower_copy(resourceName) == "txadmin")
+						{
+							continue;
+						}
+
 						scannedNow.emplace(resourceName, resPath);
 
 						auto oldRes = m_manager->GetResource(resourceName, false);

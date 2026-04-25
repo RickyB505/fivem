@@ -7,7 +7,6 @@ import {
   FlexRestricter,
   Pad,
   Modal,
-  PremiumBadge,
   Text,
   Title,
 } from '@cfx-dev/ui-components';
@@ -72,7 +71,7 @@ export const ServerSelectorTileItem = observer(function ServerSelectorTileItem(p
 
           <Flex fullWidth>
             <Box height={10}>
-              <ServerIcon glow type="list" server={firstServer} />
+              <ServerIcon type="list" server={firstServer} />
             </Box>
 
             <FlexRestricter>
@@ -151,7 +150,7 @@ const ServerSelectorModal = observer(function ServerSelectorModal(props: ServerS
           <Flex vertical centered>
             <div />
             <div />
-            <ServerIcon server={firstServer} type="details" glow />
+            <ServerIcon server={firstServer} type="details" />
 
             <div />
 
@@ -159,13 +158,11 @@ const ServerSelectorModal = observer(function ServerSelectorModal(props: ServerS
 
             <Flex centered="axis" gap="normal">
               <Flex centered="axis" gap="thin">
-                <Icon opacity="75">{Icons.playersCount}</Icon>
-                <Text>{totalPlayers}</Text>
+                <Icon opacity="50">{Icons.playersCount}</Icon>
+                <Text opacity="75">{totalPlayers}</Text>
               </Flex>
 
               <ServerPower server={firstServer} />
-
-              <PremiumBadge level={firstServer.premium!} />
             </Flex>
 
             <Box width="75%">

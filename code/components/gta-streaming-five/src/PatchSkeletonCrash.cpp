@@ -2,6 +2,7 @@
 
 #include <jitasm.h>
 #include <Hooking.h>
+#include "Hooking.Stubs.h"
 
 #include <CrossBuildRuntime.h>
 
@@ -33,6 +34,19 @@ static void GetGlobalMatrix(rage::crSkeleton* skeleton, uint32_t boneIndex, rage
 	else if (skeleton && skeleton->m_parent)
 	{
 		*outMatrix = *skeleton->m_parent;
+	}
+	else
+	{
+		*outMatrix = DirectX::XMMatrixIdentity();
+	}
+}
+
+static void (*g_getGlobalMatrixFuncPatch)(rage::crSkeleton*, uint32_t, rage::Mat34V*);
+static void GetGlobalMatrixFuncPatch(rage::crSkeleton* skeleton, const uint32_t boneIndex, rage::Mat34V* outMatrix)
+{
+	if (boneIndex < skeleton->m_boneCount)
+	{
+		g_getGlobalMatrixFuncPatch(skeleton, boneIndex, outMatrix);
 	}
 	else
 	{
@@ -107,6 +121,9 @@ static HookFunction hookFunction([]()
 		}
 	}
 
+	// crSkeleton::_GetGlobalMatrix (global boneIndex bounds-check)
+	g_getGlobalMatrixFuncPatch = hook::trampoline(hook::get_pattern("40 55 48 8D 6C 24 ? 48 81 EC ? ? ? ? 4D 8B D0"), GetGlobalMatrixFuncPatch);
+
 	// crSkeletonData::_GetGlobalTransform
 	{
 		std::initializer_list<std::tuple<std::string_view, ptrdiff_t>> list = {
@@ -160,6 +177,42 @@ static HookFunction hookFunction([]()
 				put_call(location + offset, funcStub);
 			}
 		}
+	}
+
+	// CPedWeaponManager::SwitchToRagdoll
+	{
+		static struct : jitasm::Frontend
+		{
+			intptr_t retSuccess = 0;
+			intptr_t retFail = 0;
+
+			void Init(intptr_t success, intptr_t fail)
+			{
+				this->retSuccess = success;
+				this->retFail = fail;
+			}
+
+			virtual void InternalMain() override
+			{
+				mov(rax, qword_ptr[rdx+0x118]); // Original code
+				movsxd(r13, dword_ptr[rax+rcx*4]); // Original code
+				cmp(r13, -1); // Check if the index of the bone map is -1 that represents a invalid position
+				je("fail");
+				mov(rax, this->retSuccess);
+				jmp(rax);
+				L("fail");
+				mov(rax, this->retFail);
+				jmp(rax);
+			}
+		} patchStub;
+		
+		auto location = hook::get_pattern("48 8B 82 ? ? ? ? 4C 63 2C 88");
+		hook::nop(location, 11);
+		const auto successPtr = reinterpret_cast<intptr_t>(location) + 11;
+		const auto failPtr = reinterpret_cast<intptr_t>(hook::get_pattern("4C 8D 85 ? ? ? ? E8 ? ? ? ? 4C 8D 9C 24 ? ? ? ? 49 8B 5B ? 41 0F 28 73", 12));
+		assert((failPtr - reinterpret_cast<intptr_t>(location)) < 3000);
+		patchStub.Init(successPtr, failPtr);
+		hook::jump(location, patchStub.GetCode());
 	}
 
 #if 0
